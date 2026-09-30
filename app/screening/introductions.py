@@ -127,7 +127,10 @@ def _same_sector(text: str, sector: str) -> bool:
 def screen_introductions(contacts: list[Contact], intros: list[IntroRecord], aliases: list[str],
                          cfg: dict[str, Any], sector: str | None = None) -> IntroScreen:
     screen = IntroScreen()
-    by_email = {c.email: c for c in contacts}
+    from app.screening.contacts import alternative_emails
+
+    by_email = {alt: c for c in contacts for alt in alternative_emails(c.values)}
+    by_email.update({c.email: c for c in contacts})
     by_name: dict[str, list[Contact]] = {}
     by_org: dict[str, list[Contact]] = {}
     for c in contacts:

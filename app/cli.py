@@ -23,7 +23,17 @@ from pathlib import Path
 from app.config import get_settings, load_config
 from app.errors import ExportUnavailableError, InvestorMatchError
 from app.extraction.deal_profile import make_override
-from app.pipeline import deliver_results, extract, load_deck, load_tables, output_names, render_outputs, run_matching
+from app.pipeline import (
+    builtin_suppression_tables,
+    deliver_results,
+    extract,
+    load_builtin_tables,
+    load_deck,
+    load_tables,
+    output_names,
+    render_outputs,
+    run_matching,
+)
 from app.reports.frames import summary_counts
 from app.screening.introductions import file_mentions_alias
 
@@ -63,7 +73,13 @@ def main(argv: list[str] | None = None) -> int:
             for name, spec in json.loads(args.overrides.read_text(encoding="utf-8")).items():
                 profile.overrides[name] = make_override(profile, name, spec["value"], spec.get("reason", ""))
         aliases = args.alias + [a for a in (profile.effective("company_name"), profile.effective("legal_name")) if a]
-        investors = load_tables(investors_path)
+        builtin = settings.builtin_investor_lists()
+        if investors_path in builtin:
+            investors = load_builtin_tables(investors_path)
+        else:
+            investors = load_tables(investors_path)
+        # Unsubscribe sheets of every built-in list always apply.
+        investors += builtin_suppression_tables(exclude={investors_path}, settings=settings)
         intros = []
         specific = {p.name for p in args.company_specific}
         for path in args.intros:

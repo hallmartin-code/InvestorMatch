@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import hashlib
 import io
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from app.utils.text import clean_cell
 
 TABLE_EXT = {".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls"}
 HEADER_SCAN_ROWS = 15
+_EMAIL_CELL = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
 
 @dataclass
@@ -60,15 +62,26 @@ def _from_grid(grid: list[list[str]], filename: str, sheet: str | None, sha: str
     if not any(any(c for c in row) for row in grid):
         return None
     header = _header_index(grid)
-    columns = _unique([clean_cell(c) for c in grid[header]])
+    header_cells = [clean_cell(c) for c in grid[header]]
+    headerless = any(_EMAIL_CELL.match(c) for c in header_cells if c)
+    if headerless:  # the first row is data (an email address is never a column header)
+        width = max(len(r) for r in grid)
+        columns = [f"Column {i + 1}" for i in range(width)]
+        data_start = header
+    else:
+        columns = _unique(header_cells)
+        data_start = header + 1
     rows, numbers = [], []
-    for offset, raw in enumerate(grid[header + 1:], start=header + 2):
+    for offset, raw in enumerate(grid[data_start:], start=data_start + 1):
         cells = [clean_cell(c) for c in raw] + [""] * max(0, len(columns) - len(raw))
         if not any(cells):
             continue
         rows.append(dict(zip(columns, cells[: len(columns)], strict=False)))
         numbers.append(offset)
-    return ImportedTable(filename=filename, sheet=sheet, columns=columns, rows=rows, row_numbers=numbers, sha256=sha)
+    table = ImportedTable(filename=filename, sheet=sheet, columns=columns, rows=rows, row_numbers=numbers, sha256=sha)
+    if headerless:
+        table.warnings.append("No header row found (the first row holds data); columns are named Column 1, 2, …")
+    return table
 
 
 def _decode(data: bytes) -> str:

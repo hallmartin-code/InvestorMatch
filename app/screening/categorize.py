@@ -14,8 +14,8 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (Category.ANGEL_GROUP, re.compile(r"angel (?:group|network|club|collective|fund|association|syndicate)|"
                                       r"\bsyndicates?\b|investor network|angel groups?", re.I)),
     (Category.ANGEL, re.compile(r"\bangel\b|\bangel investor\b|individual investor|\bindividual\b", re.I)),
-    (Category.FAMILY_OFFICE, re.compile(r"family office|\bHNI\b|\bHNWI?s?\b|high[- ]net[- ]worth|\bSFO\b|\bMFO\b|"
-                                        r"private wealth", re.I)),
+    (Category.FAMILY_OFFICE, re.compile(r"family (?:investment )?offices?|family investment|\bHNI\b|\bHNWI?s?\b|"
+                                        r"high[- ]net[- ]worth|\bSFO\b|\bMFO\b|private wealth", re.I)),
     (Category.VC, re.compile(r"venture capital|\bVCs?\b|venture fund|seed fund|micro[- ]?vc|corporate venture\w*|"
                              r"\bCVC\b|venture arm|early[- ]stage fund|pre-?seed fund|\bventures?\b", re.I)),
 ]

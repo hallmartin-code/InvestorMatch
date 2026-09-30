@@ -29,7 +29,7 @@ python -m app.cli --deck sample_data/cardiolyte_health_deck.pptx \
     --investors sample_data/TEN_Capital_Investor_List_SAMPLE.xlsx \
     --intros sample_data/TEN_Intro_Tracker_2026.xlsx sample_data/cardiolyte_health_intros_Q3.csv \
     --out output
-pytest                                       # 60 tests
+pytest                                       # 73 tests
 ```
 
 Example outputs from that run are in [`sample_output/`](sample_output/). Python 3.11+.
@@ -78,6 +78,28 @@ fields the rules missed are filled, keyword-classified sector/subsector is repla
 classification, matching values are marked "Confirmed by Claude", and disagreements become **conflicts** for the
 user to resolve. The deck is passed as data in `<deck>` tags with an instruction to ignore instructions inside
 it. Screening, scoring and the template-driven PDF/Excel stay deterministic Python.
+
+## Built-in investor lists
+
+Trusted lists live in `data/investor_lists/` (or `IM_INVESTOR_LISTS_DIR`). The Inputs step offers them in a picker,
+newest first, with the newest selected by default; pick one or more, and upload other lists alongside if needed.
+Parsed files are cached per file version, so later runs skip re-reading them. **Unsubscribe sheets from every built-in list
+always apply**, even when that list isn't selected. Within a file, a contact sheet whose emails are already on a
+larger sheet (a segment such as "A-Priority" of "Master") is skipped automatically.
+
+## Multi-sheet investor workbooks
+
+Every sheet of the investor workbook is read and given a role, shown and changeable in the Column mapping step:
+
+* **Investor contacts** — mapped as usual; duplicates across sheets are merged by email.
+* **Unsubscribe / suppression list** — detected from the sheet name (unsub, opt-out, do not contact, DNC, bounced…)
+  or a column that marks every row "Unsub". Every email on it (found by header or by content) excludes the matching
+  contact, including matches on a contact's *Alternative emails*; the exclusion cites the sheet and row.
+* **Skip** — sheets without identifiable email and name columns are skipped with a note instead of blocking the run.
+
+Sheets whose first row is data (an email address where a header would be) are read without a header row.
+A free-text *Description / profile* column is used as fallback evidence for sector, stage, geography and check size
+when the dedicated columns are empty; such points are labelled "(from description)" and never exclude a contact.
 
 ## Screening
 
@@ -161,7 +183,7 @@ Copy `.env.example` to `.env`. Secrets are read only from the environment.
 |---|---|
 | `IM_INVESTOR_LIST_PATH` | Default TEN Capital Investor List (else `data/TEN*Investor*List*.xlsx`) |
 | `ANTHROPIC_API_KEY`, `IM_LLM_ENABLED`, `IM_LLM_MODEL` | Claude deck analysis (on when a key is set; default model `claude-opus-5-5`) |
-| `TEN_APP_PASSWORD` | Access password for the web app (always set on a public deployment) |
+| `TEN_APP_PASSWORD` | Optional access password for the web app (unset = no password) |
 | `RESEND_API_KEY`, `IM_NOTIFY_TO`, `IM_NOTIFY_FROM` | Automated results email after every generation (default to `Info@tencapital.group`, from `reports@tencapital.group`; the sender domain must be verified in Resend). `IM_NOTIFY_ENABLED=false` or CLI `--no-email` turns it off. |
 | `IM_GOOGLE_SERVICE_ACCOUNT_FILE` (or `GOOGLE_APPLICATION_CREDENTIALS`) | Service-account JSON key for Google Sheets export |
 | `IM_GOOGLE_DRIVE_FOLDER_ID`, `IM_GOOGLE_SHARE_WITH` | Optional target folder; addresses to share with (no notification email) |

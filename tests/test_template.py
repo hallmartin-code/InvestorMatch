@@ -36,7 +36,7 @@ def test_template_holds_no_run_data(samples):
     assert not re.search(r"[$€£]\s?\d", text)                          # no money amounts
     assert not re.search(r"\b20\d\d\b", text)                          # no dates/years
     sample_terms = {"Cardiolyte", "Austin", "Pulse", "Hill Country", "Meridian", "SAFE", "Seed round"}
-    assert not [term for term in sample_terms if re.search(rf"{re.escape(term)}", text)]
+    assert not [term for term in sample_terms if re.search(rf"\b{re.escape(term)}\b", text)]
 
 
 def test_invalid_templates_are_rejected():

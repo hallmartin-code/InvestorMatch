@@ -32,6 +32,8 @@ class Settings(BaseSettings):
 
     # Optional default TEN Capital Investor List (used when no list is uploaded).
     im_investor_list_path: Path | None = None
+    # Trusted folder of built-in investor lists offered in the app (their unsubscribe sheets always apply).
+    im_investor_lists_dir: Path = DATA_DIR / "investor_lists"
     im_config_path: Path = DEFAULT_CONFIG_PATH
     im_log_level: str = "INFO"
 
@@ -85,10 +87,22 @@ class Settings(BaseSettings):
                 return Path(candidate)
         return None
 
+    def builtin_investor_lists(self) -> list[Path]:
+        """Trusted, built-in investor lists (``data/investor_lists/`` or IM_INVESTOR_LISTS_DIR), newest first."""
+        folder = Path(self.im_investor_lists_dir)
+        if not folder.is_dir():
+            return []
+        files = [p for p in folder.iterdir() if p.suffix.lower() in {".xlsx", ".xls", ".csv"}
+                 and not p.name.startswith("~$")]
+        return sorted(files, key=lambda p: (-p.stat().st_mtime, p.name))
+
     def default_investor_list(self) -> Path | None:
-        """The configured list, else the first ``data/TEN*Investor*List*`` file in the project."""
+        """IM_INVESTOR_LIST_PATH, else the newest built-in list, else ``data/TEN*Investor*List*``."""
         if self.im_investor_list_path and Path(self.im_investor_list_path).is_file():
             return Path(self.im_investor_list_path)
+        builtin = self.builtin_investor_lists()
+        if builtin:
+            return builtin[0]
         if DATA_DIR.is_dir():
             for pattern in ("TEN*Investor*List*.xlsx", "TEN*Investor*List*.csv", "TEN*Investor*List*.xls"):
                 found = sorted(DATA_DIR.glob(pattern))

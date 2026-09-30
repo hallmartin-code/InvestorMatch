@@ -13,7 +13,18 @@ from typing import Any
 
 from app.extraction.deal_profile import build_context, extract_profile
 from app.ingestion.deck import DeckDocument, read_deck
-from app.ingestion.mapping import INTRO_FIELDS, INVESTOR_FIELDS, auto_map, require_valid
+from app.errors import MappingError
+from app.ingestion.mapping import (
+    INTRO_FIELDS,
+    INVESTOR_FIELDS,
+    ROLE_CONTACTS,
+    ROLE_LABELS,
+    ROLE_SKIP,
+    ROLE_SUPPRESSION,
+    auto_map,
+    detect_role,
+    require_valid,
+)
 from app.ingestion.tables import ImportedTable, read_table_file
 from app.models import (
     DealProfile,
@@ -26,7 +37,7 @@ from app.models import (
 )
 from app.screening import introductions as intro_mod
 from app.screening.categorize import categorize
-from app.screening.contacts import build_records, consolidate, contact_log
+from app.screening.contacts import build_records, consolidate, contact_log, suppression_emails
 from app.screening.ranking import rank
 from app.screening.scoring import incompatibility, parse_attributes, score_contact
 from app.utils.logging import get_logger
@@ -43,13 +54,72 @@ class TableInput:
     table: ImportedTable
     mapping: dict[str, str | None]
     company_specific: bool = False     # intro lists without a company column
+    role: str = ROLE_CONTACTS          # investor lists: contacts | suppression | skip (see detect_role)
+    role_reason: str = ""
 
 
 def load_tables(path: Path | None = None, *, data: bytes | None = None, filename: str | None = None,
                 kind: str = "investor") -> list[TableInput]:
     specs = INVESTOR_FIELDS if kind == "investor" else INTRO_FIELDS
     tables = read_table_file(path, data=data, filename=filename)
-    return [TableInput(t, auto_map(t, specs)) for t in tables]
+    inputs = [TableInput(t, auto_map(t, specs)) for t in tables]
+    if kind == "investor":
+        for t in inputs:
+            t.role, t.role_reason = detect_role(t.table, t.mapping)
+        _skip_subset_sheets(inputs)
+    return inputs
+
+
+def _sheet_emails(t: TableInput) -> set[str]:
+    from app.utils.text import normalize_email
+
+    column = t.mapping.get("email")
+    return {normalize_email(r[column]) for r in t.table.rows if column and r.get(column)} - {""}
+
+
+def _skip_subset_sheets(inputs: list[TableInput], threshold: float = 0.98) -> None:
+    """A contact sheet whose emails are (almost) all on a larger contact sheet of the same file is a
+    segment/view of it (e.g. 'A-Priority' of 'Master'): skip it instead of merging thousands of duplicates."""
+    contacts = sorted((t for t in inputs if t.role == ROLE_CONTACTS), key=lambda t: -len(t.table.rows))
+    emails = {id(t): _sheet_emails(t) for t in contacts}
+    for i, small in enumerate(contacts):
+        mine = emails[id(small)]
+        if not mine:
+            continue
+        for big in contacts[:i]:
+            if big.role == ROLE_CONTACTS and len(mine & emails[id(big)]) >= threshold * len(mine):
+                small.role = ROLE_SKIP
+                small.role_reason = f"its contacts are already on the larger sheet '{big.table.sheet}'"
+                break
+
+
+_BUILTIN_CACHE: dict[tuple[str, float], list[ImportedTable]] = {}
+
+
+def load_builtin_tables(path: Path) -> list[TableInput]:
+    """A built-in list's sheets, parsed once per file version and shared (read-only) across sessions;
+    mappings and roles are fresh per call so one user's edits never affect another's."""
+    key = (str(path), Path(path).stat().st_mtime)
+    if key not in _BUILTIN_CACHE:
+        _BUILTIN_CACHE[key] = read_table_file(path)
+    inputs = [TableInput(t, auto_map(t, INVESTOR_FIELDS)) for t in _BUILTIN_CACHE[key]]
+    for t in inputs:
+        t.role, t.role_reason = detect_role(t.table, t.mapping)
+    _skip_subset_sheets(inputs)
+    return inputs
+
+
+def builtin_suppression_tables(exclude: set[Path] = frozenset(), settings=None) -> list[TableInput]:
+    """Unsubscribe / suppression sheets of every built-in list — applied even when that list isn't selected."""
+    from app.config import get_settings
+
+    settings = settings or get_settings()
+    out = []
+    for path in settings.builtin_investor_lists():
+        if path in exclude:
+            continue
+        out += [t for t in load_builtin_tables(path) if t.role == ROLE_SUPPRESSION]
+    return out
 
 
 def load_deck(path: Path, cfg: dict[str, Any], display_name: str | None = None) -> DeckDocument:
@@ -89,13 +159,26 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
                  intro_decisions: dict[str, str] | None = None, report_date: date | None = None) -> RunResult:
     intro_decisions = intro_decisions or {}
     ctx = build_context(profile, user_aliases)
-    for t in investor_tables:
+    contact_tables = [t for t in investor_tables if t.role == ROLE_CONTACTS]
+    suppression_tables = [t for t in investor_tables if t.role == ROLE_SUPPRESSION]
+    if not contact_tables:
+        raise MappingError("No sheet is set to 'Investor contacts'. Set at least one investor-list sheet as contacts "
+                           "and map its email and name columns.")
+    for t in contact_tables:
         require_valid(t.mapping, "investor", t.table)
+    suppression_list = {}
+    for t in suppression_tables:
+        emails = suppression_emails(t.table, t.mapping)
+        if not emails:
+            raise MappingError(f"{t.table.label} is set as an unsubscribe list but no email column was found. "
+                               "Map its email column or skip the sheet.")
+        for email, ref in emails.items():
+            suppression_list.setdefault(email, ref)
     for t in intro_tables:
         require_valid(t.mapping, "intro", t.table)
 
-    records = [r for t in investor_tables for r in build_records(t.table, t.mapping, cfg)]
-    contacts, log = consolidate(records, cfg)
+    records = [r for t in contact_tables for r in build_records(t.table, t.mapping, cfg)]
+    contacts, log = consolidate(records, cfg, suppression_list)
     limitations: list[str] = []
 
     active = []
@@ -192,6 +275,14 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
 
     # ---- limitations
     limitations.extend(_limitations(profile, ctx, intro_tables, screen, ranked, contacts, log))
+    for t in investor_tables:
+        if t.role == ROLE_SKIP:
+            limitations.append(f"Sheet {t.table.label} was not used ({t.role_reason or 'skipped'}).")
+    if suppression_tables:
+        listed = sum(1 for e in log if e.code == "SUPPRESSED" and "unsubscribe list" in e.detail)
+        limitations.insert(0, f"{len(suppression_list)} address(es) on unsubscribe sheet(s) "
+                              f"({', '.join(t.table.sheet or t.table.filename for t in suppression_tables)}); "
+                              f"{listed} matching contact(s) excluded.")
     stats = {
         "investor_rows": len(records), "unique_contacts": len(contacts),
         "suppressed": sum(1 for e in log if e.code == "SUPPRESSED"),
@@ -205,7 +296,8 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
     files = []
     for role, group in (("TEN Capital Investor List", investor_tables), ("Investor Introductions", intro_tables)):
         for t in group:
-            files.append({"Role": role, "File": t.table.filename, "Sheet": t.table.sheet or "",
+            label = role if group is intro_tables else f"{role} — {ROLE_LABELS[t.role]}"
+            files.append({"Role": label, "File": t.table.filename, "Sheet": t.table.sheet or "",
                           "Rows": str(len(t.table.rows)), "SHA-256": t.table.sha256[:16],
                           "Company-specific": "Y" if t.company_specific else ""})
     LOGGER.info("Run: %d contacts, %d ranked, %d excluded", len(contacts), len(ranked), stats["excluded"])

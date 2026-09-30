@@ -3,7 +3,9 @@
 !.env.example
 *.json.key
 service-account*.json
-data/
+# data/ is excluded, except the trusted built-in investor lists (deployed with the app)
+data/*
+!data/investor_lists/
 output/*
 !output/.gitkeep
 __pycache__/

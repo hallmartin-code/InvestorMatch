@@ -25,14 +25,63 @@ from app.utils.text import (
     split_name,
 )
 
-LIST_KEYS = {"sector_focus", "thesis", "geo_focus", "ten_events", "ten_similar_intros", "notes", "stage_focus"}
+LIST_KEYS = {"sector_focus", "thesis", "geo_focus", "ten_events", "ten_similar_intros", "notes", "stage_focus",
+             "alt_emails"}
+
+
+def alternative_emails(values: dict[str, str]) -> list[str]:
+    """Valid addresses from the 'Alternative emails' field (normalized)."""
+    return [normalize_email(p) for p in re.split(r"[;,\s]+", values.get("alt_emails", "") or "")
+            if is_valid_email(normalize_email(p))]
+
+
+def suppression_emails(table: ImportedTable, mapping: dict[str, str | None]) -> dict[str, SourceRef]:
+    """Emails on an unsubscribe / suppression sheet → the row that lists them."""
+    from app.ingestion.mapping import email_column_by_content
+
+    column = mapping.get("email") or email_column_by_content(table)
+    out: dict[str, SourceRef] = {}
+    if not column:
+        return out
+    for row, number in zip(table.rows, table.row_numbers, strict=True):
+        for part in re.split(r"[;,\s]+", row.get(column, "") or ""):
+            email = normalize_email(part)
+            if is_valid_email(email):
+                out.setdefault(email, SourceRef(table.filename, f"row {number}", table.sheet))
+    return out
+
+
 LABELS = {f.key: f.label for f in INVESTOR_FIELDS}
-_SUPPRESSION_HEADER = re.compile(r"unsub|suppress|opt|dnc|do not|blacklist|bounce", re.I)
+_SUPPRESSION_HEADER = re.compile(r"unsub|suppress|opt.?out|\bdnc\b|do.?not|blacklist|block.?list|bounce", re.I)
+# Values that mean "do not email" in any status-like column (e.g. Latest Status = "UNSUB").
+_SUPPRESSION_STATUS = re.compile(r"^\s*(?:unsub\w*|opted.?out|opt.?out|do not (?:contact|email)|dnc|bounced?|"
+                                 r"suppressed|hard bounce)\b", re.I)
+
+
+def _extra_suppression_columns(table: ImportedTable, mapped: str | None) -> tuple[list[str], list[str]]:
+    """(flag columns, status columns) beyond the mapped suppression column."""
+    flags = [c for c in table.columns if c != mapped and _SUPPRESSION_HEADER.search(c)]
+    statuses = [c for c in table.columns if c != mapped and c not in flags and re.search(r"status", c, re.I)]
+    return flags, statuses
+
+
+def _extra_suppression(row: dict[str, str], flags: list[str], statuses: list[str]) -> str | None:
+    for col in flags:
+        value = (row.get(col) or "").strip()
+        if value and (is_truthy(value) or _SUPPRESSION_STATUS.match(value)):
+            return f"{col}: {value}"
+    for col in statuses:
+        value = (row.get(col) or "").strip()
+        if value and (_SUPPRESSION_STATUS.match(value) or re.search(r"unsubscribed|do not contact", value, re.I)):
+            return f"{col}: {value}"
+    return None
 
 
 def build_records(table: ImportedTable, mapping: dict[str, str | None], cfg: dict[str, Any]) -> list[ContactRecord]:
     terms = [t.lower() for t in cfg["screening"]["suppression_terms"]]
     header = mapping.get("suppression") or ""
+    flag_cols, status_cols = _extra_suppression_columns(table, mapping.get("suppression"))
+    raw_rows = dict(zip(table.row_numbers, table.rows, strict=True))
     records = []
     for values, row in apply_mapping(table, mapping):
         if not values.get("first_name") and not values.get("last_name") and values.get("full_name"):
@@ -45,6 +94,8 @@ def build_records(table: ImportedTable, mapping: dict[str, str | None], cfg: dic
                 reason = f"{mapping['suppression']}: {values['suppression']}"
             elif is_truthy(status) and _SUPPRESSION_HEADER.search(header):
                 reason = f"{header}: {values['suppression']}"
+        if reason is None and (flag_cols or status_cols):
+            reason = _extra_suppression(raw_rows[row], flag_cols, status_cols)
         values["_suppressed"] = reason or ""
         values["_participation_header"] = mapping.get("participation") or ""
         records.append(ContactRecord(values=values, source=SourceRef(table.filename, f"row {row}", table.sheet)))
@@ -68,7 +119,8 @@ def _pick_email(raw: str) -> tuple[str, str]:
     return "", raw
 
 
-def consolidate(records: list[ContactRecord], cfg: dict[str, Any]) -> tuple[list[Contact], list[LogEntry]]:
+def consolidate(records: list[ContactRecord], cfg: dict[str, Any],
+                suppression_list: dict[str, SourceRef] | None = None) -> tuple[list[Contact], list[LogEntry]]:
     generic = {p.lower() for p in cfg["screening"]["generic_inbox_prefixes"]}
     log: list[LogEntry] = []
     groups: dict[str, list[tuple[ContactRecord, str]]] = {}
@@ -110,6 +162,11 @@ def consolidate(records: list[ContactRecord], cfg: dict[str, Any]) -> tuple[list
                         merged["_type_conflict"] = " | ".join(values)
         merged["_participation_header"] = recs[0].values.get("_participation_header", "")
         suppressed = [r.values["_suppressed"] for r in recs if r.values.get("_suppressed")]
+        if suppression_list:
+            listed = next((suppression_list[e] for e in [email, *alternative_emails(merged)] if e in suppression_list),
+                          None)
+            if listed is not None:
+                suppressed.append(f"listed on unsubscribe list {listed.label}")
         contact = Contact(
             email=email, email_display=members[0][1], first_name=merged.get("first_name", ""),
             last_name=merged.get("last_name", ""), organization=merged.get("organization", ""), values=merged,
@@ -118,7 +175,8 @@ def consolidate(records: list[ContactRecord], cfg: dict[str, Any]) -> tuple[list
             generic_inbox=email_local_part(email) in generic,
         )
         if len(recs) > 1:
-            detail = "; ".join(notes + ([f"filled from duplicates: {', '.join(filled)}"] if filled else []))                 or "identical values"
+            filled_note = [f"filled from duplicates: {', '.join(filled)}"] if filled else []
+            detail = "; ".join(notes + filled_note) or "identical values"
             if suppressed and len(suppressed) < len(recs):
                 detail += "; suppression on one record applied to all duplicates"
             log.append(_log(LogStatus.MERGED, "DUPLICATE_MERGED", f"Consolidated {len(recs)} records with the same email",

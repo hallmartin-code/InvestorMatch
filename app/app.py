@@ -23,7 +23,17 @@ from app.config import FAVICON_PATH, get_settings, load_config  # noqa: E402
 from app.errors import ExportUnavailableError, InvestorMatchError  # noqa: E402
 from app.extraction import taxonomy as tx  # noqa: E402
 from app.extraction.deal_profile import build_context, make_override, profile_bullets  # noqa: E402
-from app.ingestion.mapping import INTRO_FIELDS, INVESTOR_FIELDS, validate_mapping  # noqa: E402
+from app.ingestion.mapping import (  # noqa: E402
+    INTRO_FIELDS,
+    INVESTOR_FIELDS,
+    ROLE_CONTACTS,
+    ROLE_LABELS,
+    ROLE_SKIP,
+    ROLE_SUPPRESSION,
+    email_column_by_content,
+    validate_mapping,
+)
+from app.screening.contacts import suppression_emails  # noqa: E402
 from app.models import DEAL_FIELDS, FactStatus, LogStatus, refs_label  # noqa: E402
 from app.pipeline import (  # noqa: E402
     DECISION_INTRODUCED,
@@ -31,6 +41,8 @@ from app.pipeline import (  # noqa: E402
     DECISION_REVIEW,
     deliver_results,
     extract,
+    builtin_suppression_tables,
+    load_builtin_tables,
     load_deck,
     load_tables,
     output_names,
@@ -84,6 +96,12 @@ incompatibility excludes the contact. **Evidence completeness** (share of the fi
 documented) is reported separately and breaks ties. Contacts scoring ≥ {cfg['thresholds']['min_fit_score']} are
 kept; each organization is capped at {cfg['thresholds']['org_cap']} contacts.
 """
+
+
+def _list_label(path: Path) -> str:
+    from datetime import date
+
+    return f"{path.name}  ·  updated {date.fromtimestamp(path.stat().st_mtime):%b %d, %Y}"
 
 
 def _tmp_path(name: str, data: bytes) -> Path:
@@ -155,11 +173,20 @@ def step_inputs() -> None:
     with hero:
         deck_file = st.file_uploader("Pitch deck", type=["pdf", "pptx", "ppt"], key="deck_upload",
                                      help="PDF, PPTX or legacy PPT. Image-only slides are read with OCR.")
-        default_list = settings.default_investor_list()
+        builtin = settings.builtin_investor_lists()
+        chosen: list = []
+        if builtin:
+            chosen = st.multiselect(
+                "TEN Capital investor lists (built-in)", builtin, default=builtin[:1],
+                format_func=_list_label,
+                help="Trusted lists stored with the app, newest first. Pick one or more; duplicates across lists "
+                     "are merged by email. Unsubscribe sheets from every built-in list always apply.")
         left, right = st.columns(2)
-        inv_file = left.file_uploader("TEN Capital Investor List", type=["xlsx", "xls", "csv"],
-                                      help="Excel or CSV. Column headers are mapped in the next step.")
-        if default_list and not inv_file:
+        inv_files = left.file_uploader("Other investor lists (optional)" if builtin else "TEN Capital Investor List",
+                                       type=["xlsx", "xls", "csv"], accept_multiple_files=True,
+                                       help="Excel or CSV. Column headers are mapped in the next step.")
+        default_list = None if builtin else settings.default_investor_list()
+        if default_list and not inv_files:
             left.caption(f"No upload: the project list **{default_list.name}** will be used.")
         intro_files = right.file_uploader("Investor Introductions lists (optional)", type=["xlsx", "xls", "csv"],
                                           accept_multiple_files=True,
@@ -174,7 +201,7 @@ def step_inputs() -> None:
                                      "against the rule-based extraction; every fact must quote its slide.")
         else:
             st.caption("Claude analysis is off (no ANTHROPIC_API_KEY); rule-based extraction is used.")
-        ready = deck_file is not None and (inv_file is not None or default_list is not None)
+        ready = deck_file is not None and bool(chosen or inv_files or default_list)
         with st.container(key="tc-cta"):
             clicked = st.button("Analyze deck and investor lists →", type="primary", disabled=not ready,
                                 width="stretch")
@@ -190,8 +217,16 @@ def step_inputs() -> None:
                         client = ClaudeClient(settings)
                     state.profile = extract(deck, llm_client=client)
                     state.deck = deck
-                state.investors = (load_tables(data=inv_file.getvalue(), filename=inv_file.name) if inv_file
-                                   else load_tables(default_list))
+                with st.spinner("Loading investor lists…"):
+                    investors = []
+                    for path in chosen:
+                        investors += load_builtin_tables(path)
+                    for f in inv_files or []:
+                        investors += load_tables(data=f.getvalue(), filename=f.name)
+                    if not investors and default_list:
+                        investors = load_tables(default_list)
+                    investors += builtin_suppression_tables(exclude=set(chosen), settings=settings)
+                state.investors = investors
                 state.aliases = [a.strip() for a in aliases.split(",") if a.strip()]
                 deck_names = [n for n in (state.profile.effective("company_name"),
                                           state.profile.effective("legal_name")) if n]
@@ -211,8 +246,33 @@ def step_inputs() -> None:
 
 def _mapping_editor(t, specs, kind: str, index: int) -> None:
     table = t.table
-    with st.expander(f"{table.label} — {len(table.rows)} rows", expanded=index == 0):
+    role_note = f" · {ROLE_LABELS[t.role]}" if kind == "investor" else ""
+    with st.expander(f"{table.label} — {len(table.rows)} rows{role_note}",
+                     expanded=index == 0 or (kind == "investor" and t.role == ROLE_SUPPRESSION
+                                             and len(table.rows) < 2000)):
+        for warning in table.warnings:
+            st.caption(f"ℹ {warning}")
         options = [UNMAPPED] + table.columns
+        if kind == "investor":
+            roles = list(ROLE_LABELS)
+            t.role = st.selectbox("Use this sheet as", roles, index=roles.index(t.role),
+                                  format_func=ROLE_LABELS.get, key=f"role-{index}",
+                                  help="Unsubscribe lists remove every listed email from the results. "
+                                       "Skipped sheets are not used.")
+            if t.role_reason and t.role != ROLE_CONTACTS:
+                st.caption(f"Detected automatically: {t.role_reason}.")
+            if t.role == ROLE_SKIP:
+                return
+            if t.role == ROLE_SUPPRESSION:
+                current = t.mapping.get("email") or email_column_by_content(table) or UNMAPPED
+                choice = st.selectbox("Email column", options, index=options.index(current),
+                                      key=f"map-investor-{index}-email-suppression")
+                t.mapping["email"] = None if choice == UNMAPPED else choice
+                count = len(suppression_emails(table, t.mapping))
+                (st.caption if count else st.warning)(
+                    f"{count} valid email address(es) on this list will be excluded from the results."
+                    if count else "No valid email addresses found in that column.")
+                return
         cols = st.columns(3)
         for i, spec in enumerate(specs):
             current = t.mapping.get(spec.key) or UNMAPPED
@@ -268,7 +328,7 @@ def step_profile() -> None:
         rows.append({"Field": label, "Deck value": f.display, "Status": f.status.value,
                      "Source": refs_label(f.sources, 3), "Override": o.display if o else "",
                      "Notes": " ".join(f.notes)})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     if profile.conflicts:
         st.error("Conflicting figures: " + "; ".join(f.label for f in profile.conflicts)
                  + ". Resolve with an override below, or leave unresolved (the field is then not used).")
@@ -317,7 +377,8 @@ def step_profile() -> None:
 
 
 def _run() -> None:
-    problems = [p for t in state.investors for p in validate_mapping(t.mapping, "investor", t.table)]
+    problems = [p for t in state.investors if t.role == ROLE_CONTACTS
+                for p in validate_mapping(t.mapping, "investor", t.table)]
     problems += [p for t in state.intros for p in validate_mapping(t.mapping, "intro", t.table)]
     if problems:
         st.error(" ".join(problems))
@@ -366,7 +427,7 @@ def step_results() -> None:
     st.subheader("Ranked investors")
     df = pd.DataFrame(ranked_rows(result), columns=RANKED_COLUMNS)
     category = st.multiselect("Category", list(counts["qualified"]), default=list(counts["qualified"]))
-    st.dataframe(df[df["Category"].isin(category)], hide_index=True, use_container_width=True,
+    st.dataframe(df[df["Category"].isin(category)], hide_index=True, width="stretch",
                  column_config={"Fit Score": st.column_config.NumberColumn(format="%.1f")})
 
     review = [e for e in result.log if e.code == "POSSIBLE_PRIOR_INTRO"]
@@ -376,7 +437,7 @@ def step_results() -> None:
                                 "Organization": e.organization, "Evidence": e.detail,
                                 "Decision": state.decisions.get(e.email, DECISION_REVIEW)} for e in review])
         if not editor.empty:
-            edited = st.data_editor(editor, hide_index=True, use_container_width=True, disabled=[
+            edited = st.data_editor(editor, hide_index=True, width="stretch", disabled=[
                 "Email", "Name", "Organization", "Evidence"], column_config={"Decision": st.column_config.SelectboxColumn(
                     options=[DECISION_REVIEW, DECISION_NEW, DECISION_INTRODUCED])})
             if st.button("Apply decisions and re-run"):
@@ -385,7 +446,7 @@ def step_results() -> None:
     st.subheader("Exclusions, review items and flags")
     log = pd.DataFrame(exclusion_rows(result), columns=EXCLUSION_COLUMNS)
     status = st.multiselect("Status", [s.value for s in LogStatus], default=[LogStatus.REVIEW.value, LogStatus.EXCLUDED.value])
-    st.dataframe(log[log["Status"].isin(status)], hide_index=True, use_container_width=True)
+    st.dataframe(log[log["Status"].isin(status)], hide_index=True, width="stretch")
     st.subheader("Screening limitations")
     st.markdown("\n".join(f"- {x}" for x in result.limitations))
     st.button("Export →", type="primary", on_click=go, args=(4,))

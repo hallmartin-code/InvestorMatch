@@ -27,6 +27,7 @@ from app.utils.text import fold, is_truthy, truncate
 @dataclass
 class TenEvidence:
     core: bool | None = None
+    core_text: str = ""
     events: bool | None = None
     events_text: str = ""
     similar: bool | None = None
@@ -50,6 +51,23 @@ class InvestorAttributes:
     location: Location | None
     participation: str | None            # "co-invests" | "solo" | None
     ten: TenEvidence = field(default_factory=TenEvidence)
+    from_description: set[str] = field(default_factory=set)   # attributes read from the free-text description
+
+
+_CHECK_CONTEXT = re.compile(r"\bchecks?\b|\bticket|\binvests?\s+(?:between\s+)?(?:up to\s+)?[$€£]|"
+                            r"\binvestments? (?:of|between|from)\b|\bper (?:deal|company|investment)\b|"
+                            r"\bcheck sizes?\b|\bwrites?\b", re.I)
+
+
+def _from_description(text: str) -> tuple[tx.SectorTags, tx.StageFocus, list[GeoArea], CheckRange | None]:
+    """Evidence from a free-text investor description. Generic words ("technology") are not a generalist
+    signal here, and money only counts as a check size next to check wording."""
+    tags = tx.parse_sector_focus(text)
+    tags.generalist, tags.unrecognized = False, []
+    check = None
+    if _CHECK_CONTEXT.search(text):
+        check = parse_check(text)
+    return tags, tx.parse_stage_focus(text), tx.parse_geo_focus(text), check
 
 
 def _yes_no_count(value: str) -> bool | None:
@@ -91,8 +109,11 @@ def parse_attributes(contact: Contact, similar_intros: list[IntroRecord] | None 
     if core_text:
         if re.search(r"non-?core|tier ?[23]", core_text) or is_truthy(core_text) is False:
             ten.core = False
-        elif is_truthy(core_text) or re.search(r"\bcore\b|tier ?1", core_text):
+        else:
+            # Yes/Core/Tier 1, or a named core-list tag (e.g. "Keiretsu", "3X in 3") in the core-list column.
             ten.core = True
+            if not is_truthy(core_text):
+                ten.core_text = get("ten_core")
     if get("ten_events"):
         ten.events, ten.events_text = _yes_no_count(get("ten_events")), get("ten_events")
     if get("ten_similar_intros"):
@@ -102,26 +123,43 @@ def parse_attributes(contact: Contact, similar_intros: list[IntroRecord] | None 
         names = ", ".join(dict.fromkeys(i.company for i in similar_intros))
         ten.similar_text = "; ".join(filter(None, [ten.similar_text, f"introduced to {names}"]))
 
-    return InvestorAttributes(
+    attrs = InvestorAttributes(
         sector=tx.parse_sector_focus(get("sector_focus"), get("thesis")),
         stage=tx.parse_stage_focus(get("stage_focus")),
         check=check, geo_focus=tx.parse_geo_focus(get("geo_focus")), location=location,
         participation=participation, ten=ten,
     )
+    if get("description"):   # fallback only where the dedicated column says nothing
+        d_sector, d_stage, d_geo, d_check = _from_description(get("description"))
+        if not attrs.sector.known and d_sector.known:
+            attrs.sector = d_sector
+            attrs.from_description.add("sector")
+        if not attrs.stage.known and d_stage.known:
+            attrs.stage = d_stage
+            attrs.from_description.add("stage")
+        if not attrs.geo_focus and d_geo:
+            attrs.geo_focus = d_geo
+            attrs.from_description.add("geography")
+        if attrs.check is None and d_check is not None:
+            attrs.check = d_check
+            attrs.from_description.add("check_size")
+    return attrs
 
 
 # ------------------------------------------------------------------------------ incompatibility
 
 
 def incompatibility(attrs: InvestorAttributes, ctx: DealContext) -> tuple[str, str] | None:
-    """Explicit stage or geographic incompatibility (unknown is never incompatible)."""
+    """Explicit stage or geographic incompatibility (unknown is never incompatible). Attributes read from a
+    free-text description can add evidence but never exclude a contact."""
     st = attrs.stage
-    if st.named and not st.early_broad and not st.agnostic and st.named <= tx.LATE_ONLY:
+    stated_stage = "stage" not in attrs.from_description
+    if stated_stage and st.named and not st.early_broad and not st.agnostic and st.named <= tx.LATE_ONLY:
         return "GROWTH_ONLY", f"Growth / late-stage only (stage focus: {', '.join(sorted(st.named))})"
-    if ctx.stage and st.known and ctx.stage not in st.all_stages:
+    if stated_stage and ctx.stage and st.known and ctx.stage not in st.all_stages:
         focus = ", ".join(s for s in tx.STAGES if s in st.all_stages)
         return "STAGE_INCOMPATIBLE", f"Stated stage focus ({focus}) excludes {ctx.stage}"
-    if ctx.location and attrs.geo_focus:
+    if ctx.location and attrs.geo_focus and "geography" not in attrs.from_description:
         results = [tx.area_contains(a, ctx.location) for a in attrs.geo_focus]
         if results and all(r is False for r in results):
             names = ", ".join(a.name for a in attrs.geo_focus)
@@ -249,7 +287,7 @@ def _ten(attrs: InvestorAttributes, p: dict[str, float], w: float) -> tuple[Comp
     points, parts = 0.0, []
     if ten.core:
         points += p["core_list"]
-        parts.append("TEN core list")
+        parts.append(f"TEN core list ({truncate(ten.core_text, 40)})" if ten.core_text else "TEN core list")
     if ten.similar:
         points += p["similar_client_intros"]
         parts.append(f"intros to similar clients ({truncate(ten.similar_text, 60)})")
@@ -296,6 +334,10 @@ def score_contact(contact: Contact, attrs: InvestorAttributes, ctx: DealContext,
         _geography(attrs, ctx, cfg["geography_ratings"], weights["geography"]),
         ten_component,
     ]
+    for c in components:
+        if c.key in attrs.from_description and c.known:
+            c.evidence += " (from description)"
+            c.flags.append("read from free-text description")
     raw = sum(c.weighted for c in components)
     fit = max(1.0, min(10.0, round_score(raw)))
     completeness = sum(1 for c in components if c.known) / len(components)

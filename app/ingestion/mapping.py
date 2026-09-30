@@ -25,9 +25,13 @@ INVESTOR_FIELDS: list[FieldSpec] = [
                                           "person")),
     FieldSpec("email", "Email", ("email", "e mail", "email address", "e mail address", "work email",
                                   "primary email", "mail")),
+    FieldSpec("alt_emails", "Alternative emails", ("alternative emails", "alternative email", "alternate emails",
+                                                    "alternate email", "other emails", "secondary email",
+                                                    "additional emails", "alt emails", "alt email")),
     FieldSpec("phone", "Phone", ("phone", "phone number", "mobile", "cell", "telephone", "tel", "mobile phone",
                                   "work phone")),
-    FieldSpec("organization", "Organization", ("organization", "organisation", "firm", "company", "fund",
+    FieldSpec("organization", "Organization", ("organization", "organisation", "organization person name",
+                                                "organisation person name", "firm", "company", "fund",
                                                 "org", "firm name", "company name", "account", "affiliation")),
     FieldSpec("title", "Title", ("title", "job title", "role", "position")),
     FieldSpec("investor_type", "Investor type", ("investor type", "type", "investor category", "category",
@@ -35,15 +39,17 @@ INVESTOR_FIELDS: list[FieldSpec] = [
     FieldSpec("location", "Location", ("location", "city state", "city", "hq", "headquarters", "address",
                                         "based in", "region", "metro")),
     FieldSpec("country", "Country", ("country",)),
-    FieldSpec("sector_focus", "Sector focus", ("sector focus", "sectors", "sector", "industry focus",
-                                                "industries", "sector interests", "focus areas", "focus",
+    FieldSpec("sector_focus", "Sector focus", ("sector focus", "sectors", "sector", "sector industries",
+                                                "industry focus", "industries", "all sector tags", "sector tags",
+                                                "primary sector", "sector interests", "focus areas", "focus",
                                                 "verticals", "industry")),
     FieldSpec("thesis", "Thesis / subsector focus", ("thesis", "subsector", "sub sector", "niche",
                                                       "investment thesis", "subsector focus", "keywords")),
     FieldSpec("stage_focus", "Stage focus", ("stage focus", "stage", "stages", "stage preference",
                                               "investment stage", "preferred stage")),
     FieldSpec("check_size", "Check size", ("check size", "typical check", "ticket size", "investment size",
-                                            "cheque size", "check", "check range", "investment range")),
+                                            "cheque size", "check", "check range", "investment range",
+                                            "check intro size")),
     FieldSpec("check_min", "Check min", ("check min", "min check", "minimum check", "min investment")),
     FieldSpec("check_max", "Check max", ("check max", "max check", "maximum check", "max investment")),
     FieldSpec("geo_focus", "Geographic focus", ("geographic focus", "geo focus", "geography",
@@ -61,6 +67,9 @@ INVESTOR_FIELDS: list[FieldSpec] = [
     FieldSpec("ten_similar_intros", "Intros to similar clients", ("similar intros", "similar client intros",
                                                                    "intros to similar clients",
                                                                    "prior intros", "intro history")),
+    FieldSpec("description", "Description / profile", ("description", "description thesis", "profile", "bio",
+                                                         "about", "overview", "investment focus",
+                                                         "investor description")),
     FieldSpec("notes", "Notes", ("notes", "comments", "remarks")),
 ]
 
@@ -99,11 +108,10 @@ def auto_map(table: ImportedTable, specs: list[FieldSpec]) -> dict[str, str | No
         mapping[spec.key] = col
         used.add(col)
 
-    for spec in specs:                                  # pass 1: exact
-        for col, norm in headers.items():
-            if col not in used and norm in spec.synonyms:
-                take(spec, col)
-                break
+    for spec in specs:                                  # pass 1: exact, in synonym priority order
+        col = next((c for syn in spec.synonyms for c, norm in headers.items() if c not in used and norm == syn), None)
+        if col:
+            take(spec, col)
     for spec in specs:                                  # pass 2: containment of a multi-word synonym
         if mapping[spec.key]:
             continue
@@ -125,7 +133,54 @@ def auto_map(table: ImportedTable, specs: list[FieldSpec]) -> dict[str, str | No
                 best, best_score = col, score
         if best and best_score >= 88:
             take(spec, best)
+    if "email" in mapping and not mapping["email"]:      # pass 4: find the email column by its contents
+        column = email_column_by_content(table, exclude=used)
+        if column:
+            mapping["email"] = column
     return mapping
+
+
+def email_column_by_content(table: ImportedTable, exclude: set[str] = frozenset()) -> str | None:
+    """The column whose sampled non-empty cells are mostly valid email addresses (≥ 60%)."""
+    from app.utils.text import is_valid_email, normalize_email
+
+    best, best_share = None, 0.0
+    for col in table.columns:
+        if col in exclude:
+            continue
+        values = [r[col] for r in table.rows[:300] if r.get(col)]
+        if len(values) < 1:
+            continue
+        share = sum(is_valid_email(normalize_email(v)) for v in values) / len(values)
+        if share > best_share:
+            best, best_share = col, share
+    return best if best_share >= 0.6 else None
+
+
+# ------------------------------------------------------------------------------ sheet roles
+
+ROLE_CONTACTS = "contacts"
+ROLE_SUPPRESSION = "suppression"
+ROLE_SKIP = "skip"
+ROLE_LABELS = {ROLE_CONTACTS: "Investor contacts", ROLE_SUPPRESSION: "Unsubscribe / suppression list",
+               ROLE_SKIP: "Skip this sheet"}
+_SUPPRESSION_SHEET = re.compile(r"unsub|suppress|opt.?out|do.?not.?(contact|email)|\bdnc\b|bounce|blacklist|"
+                                r"block.?list|removed", re.I)
+_SUPPRESSION_VALUE = re.compile(r"^(unsub\w*|unsubscribed|opted.?out|suppressed|do not contact|dnc|bounced?)$", re.I)
+
+
+def detect_role(table: ImportedTable, mapping: dict[str, str | None]) -> tuple[str, str]:
+    """(role, reason) for an investor-list sheet. Never guesses a contact list it cannot map."""
+    if _SUPPRESSION_SHEET.search(table.sheet or table.filename):
+        return ROLE_SUPPRESSION, "sheet name indicates an unsubscribe / suppression list"
+    for col in table.columns:
+        values = [r[col] for r in table.rows if r.get(col)]
+        if values and len(values) >= 0.8 * len(table.rows) and                 sum(bool(_SUPPRESSION_VALUE.match(v.strip())) for v in values) >= 0.9 * len(values):
+            return ROLE_SUPPRESSION, f"every row is marked '{values[0]}' in column '{col}'"
+    problems = validate_mapping(mapping, "investor", table)
+    if problems:
+        return ROLE_SKIP, "no email and name columns could be identified — map them to use this sheet"
+    return ROLE_CONTACTS, ""
 
 
 def validate_mapping(mapping: dict[str, str | None], kind: str, table: ImportedTable) -> list[str]:
