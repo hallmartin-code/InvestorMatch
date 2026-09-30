@@ -90,6 +90,11 @@ def main(argv: list[str] | None = None) -> int:
         decisions = json.loads(args.decisions.read_text(encoding="utf-8")) if args.decisions else {}
         result = run_matching(profile, investors, intros, cfg, user_aliases=args.alias,
                               intro_decisions=decisions, report_date=args.date)
+        if not args.no_claude:
+            from app.services import claude_review
+
+            if claude_review.is_available(settings):
+                claude_review.review_held_contacts(result, investors, settings)
         pdf_name, xlsx_name = output_names(result.context.company_name, result.report_date)
         args.out.mkdir(parents=True, exist_ok=True)
         files = render_outputs(result)

@@ -42,7 +42,10 @@ railway logs --service investor-match      # runtime logs
 `data/investor_lists/` holds the trusted TEN Capital investor lists offered in the app. They are excluded from Git
 (`.gitignore`) but deployed with the app (`.railwayignore` / `.dockerignore` re-include them), so always deploy with
 `--no-gitignore`; without it the lists are left out and the app falls back to uploads. A deploy triggered from the
-GitHub repo also has no lists. To add or replace a list, put the file in `data/investor_lists/` and redeploy.
+GitHub repo also has no lists. To add or replace a list, put the file in `data/investor_lists/`, run
+`python -m app.services.files_api` (uploads it to the Anthropic Files API and records its file ID in
+`data/investor_lists/files_api.json`), then redeploy. File IDs work only with the same Anthropic organization's
+API key; if you change `ANTHROPIC_API_KEY` to a key from another organization, run the sync again.
 
 ## Cost and safety
 

@@ -325,6 +325,7 @@ class RunResult:
     report_date: date
     stats: dict[str, Any] = field(default_factory=dict)
     notifications: list[Any] = field(default_factory=list)   # NotificationOutcome per email attempt
+    category_suggestions: list[Any] = field(default_factory=list)   # verified Claude suggestions (claude_review)
 
     def counts_by_category(self) -> dict[Category, int]:
         counts = {c: 0 for c in CATEGORY_ORDER}

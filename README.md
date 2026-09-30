@@ -29,7 +29,7 @@ python -m app.cli --deck sample_data/cardiolyte_health_deck.pptx \
     --investors sample_data/TEN_Capital_Investor_List_SAMPLE.xlsx \
     --intros sample_data/TEN_Intro_Tracker_2026.xlsx sample_data/cardiolyte_health_intros_Q3.csv \
     --out output
-pytest                                       # 73 tests
+pytest                                       # 76 tests
 ```
 
 Example outputs from that run are in [`sample_output/`](sample_output/). Python 3.11+.
@@ -86,6 +86,25 @@ newest first, with the newest selected by default; pick one or more, and upload 
 Parsed files are cached per file version, so later runs skip re-reading them. **Unsubscribe sheets from every built-in list
 always apply**, even when that list isn't selected. Within a file, a contact sheet whose emails are already on a
 larger sheet (a segment such as "A-Priority" of "Master") is skipped automatically.
+
+## Files API: Claude review of held contacts
+
+The built-in lists are also uploaded to the Anthropic **Files API** so Claude can read them. Files uploaded to
+the Files API cannot be downloaded back, so matching still runs on the app's local copy. The file IDs give Claude
+the same list inside its code-execution sandbox:
+
+```bash
+python -m app.services.files_api      # upload new/changed built-in lists; IDs go to data/investor_lists/files_api.json
+```
+
+After each matching run, contacts held for review only because their investor type is missing or ambiguous,
+and that would reach the Fit Score threshold if categorized (up to 200), are sent to Claude by file, sheet, row
+and email. Claude opens the list via `container_upload`, reads each row and suggests one of the four categories
+with a verbatim quote. Each quote is verified against the app's copy of that row, and any suggestion whose quote
+isn't found is discarded. Suggestions appear in *Results → Claude category suggestions* and in the review log,
+with the evidence column and a rule check. **They are never ranked until a reviewer accepts them**; accepted ones
+re-run matching and are logged as `CATEGORY_ACCEPTED`. Toggle on the Inputs step; `IM_CLAUDE_REVIEW_ENABLED=false`
+turns it off; the CLI skips it with `--no-claude`.
 
 ## Multi-sheet investor workbooks
 

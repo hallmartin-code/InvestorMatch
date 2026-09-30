@@ -27,6 +27,7 @@ from app.ingestion.mapping import (
 )
 from app.ingestion.tables import ImportedTable, read_table_file
 from app.models import (
+    Category,
     DealProfile,
     FactStatus,
     LogEntry,
@@ -36,7 +37,7 @@ from app.models import (
     refs_label,
 )
 from app.screening import introductions as intro_mod
-from app.screening.categorize import categorize
+from app.screening.categorize import CategoryResult, categorize
 from app.screening.contacts import build_records, consolidate, contact_log, suppression_emails
 from app.screening.ranking import rank
 from app.screening.scoring import incompatibility, parse_attributes, score_contact
@@ -156,7 +157,8 @@ def _already_row(contact, match, in_master: bool) -> dict[str, str]:
 
 def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_tables: list[TableInput],
                  cfg: dict[str, Any], *, user_aliases: list[str] | None = None,
-                 intro_decisions: dict[str, str] | None = None, report_date: date | None = None) -> RunResult:
+                 intro_decisions: dict[str, str] | None = None, report_date: date | None = None,
+                 category_overrides: dict[str, str] | None = None) -> RunResult:
     intro_decisions = intro_decisions or {}
     ctx = build_context(profile, user_aliases)
     contact_tables = [t for t in investor_tables if t.role == ROLE_CONTACTS]
@@ -233,6 +235,11 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
         if c.email in screen.introduced:
             continue
         cat = categorize(c)
+        accepted = (category_overrides or {}).get(c.email)
+        if accepted and cat.review_reason:        # reviewer accepted a category for a held contact
+            log.append(contact_log(LogStatus.INFO, "CATEGORY_ACCEPTED",
+                                   f"Category set by reviewer: {accepted}", c, f"was held: {cat.review_reason}"))
+            cat = CategoryResult(category=Category(accepted))
         if cat.excluded_code:
             log.append(contact_log(LogStatus.EXCLUDED, cat.excluded_code, cat.excluded_reason, c))
             continue

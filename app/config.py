@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     im_llm_enabled: bool = True
     anthropic_api_key: SecretStr | None = None
     im_llm_model: str = "claude-opus-5-5"
+    # Claude suggests categories for held contacts, reading the investor list via the Files API.
+    im_claude_review_enabled: bool = True
 
     # Access password for the web app (set it on any public deployment).
     ten_app_password: SecretStr | None = None

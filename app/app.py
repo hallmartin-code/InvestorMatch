@@ -34,6 +34,7 @@ from app.ingestion.mapping import (  # noqa: E402
     validate_mapping,
 )
 from app.screening.contacts import suppression_emails  # noqa: E402
+from app.services import claude_review  # noqa: E402
 from app.models import DEAL_FIELDS, FactStatus, LogStatus, refs_label  # noqa: E402
 from app.pipeline import (  # noqa: E402
     DECISION_INTRODUCED,
@@ -63,7 +64,8 @@ settings = get_settings()
 cfg = load_config(settings.im_config_path)
 state = st.session_state
 for key, default in (("step", 0), ("deck", None), ("profile", None), ("investors", []), ("intros", []),
-                     ("aliases", []), ("decisions", {}), ("result", None), ("outputs", None)):
+                     ("aliases", []), ("decisions", {}), ("result", None), ("outputs", None),
+                     ("category_overrides", {})):
     state.setdefault(key, default)
 
 
@@ -201,6 +203,12 @@ def step_inputs() -> None:
                                      "against the rule-based extraction; every fact must quote its slide.")
         else:
             st.caption("Claude analysis is off (no ANTHROPIC_API_KEY); rule-based extraction is used.")
+        if claude_review.is_available(settings):
+            state.use_claude_review = st.toggle(
+                "Let Claude suggest categories for held contacts (Files API)", value=state.get("use_claude_review", True),
+                help="Claude opens the built-in list via its Files API copy and suggests a category, with a verified "
+                     "quote, for held contacts that could reach the shortlist. You accept suggestions before they "
+                     "are ranked.")
         ready = deck_file is not None and bool(chosen or inv_files or default_list)
         with st.container(key="tc-cta"):
             clicked = st.button("Analyze deck and investor lists →", type="primary", disabled=not ready,
@@ -386,7 +394,11 @@ def _run() -> None:
     try:
         with st.spinner("Screening and scoring…"):
             state.result = run_matching(state.profile, state.investors, state.intros, cfg,
-                                        user_aliases=state.aliases, intro_decisions=state.decisions)
+                                        user_aliases=state.aliases, intro_decisions=state.decisions,
+                                        category_overrides=state.category_overrides)
+        if claude_review.is_available(settings) and state.get("use_claude_review", True):
+            with st.spinner("Claude is reviewing held contacts in the investor list (Files API)…"):
+                claude_review.review_held_contacts(state.result, state.investors, settings)
         with st.spinner("Generating the PDF and workbook…"):
             state.outputs = render_outputs(state.result)
         if settings.notify_available:
@@ -430,6 +442,21 @@ def step_results() -> None:
     st.dataframe(df[df["Category"].isin(category)], hide_index=True, width="stretch",
                  column_config={"Fit Score": st.column_config.NumberColumn(format="%.1f")})
 
+    if result.category_suggestions:
+        st.subheader("Claude category suggestions — accept to rank")
+        st.caption("Claude read these contacts' rows in the investor list (Files API) and quoted the evidence; each "
+                   "quote was verified against the list. Held contacts are only ranked after you accept.")
+        table = pd.DataFrame([{"Accept": False, "Email": s.email, "Name": s.name, "Organization": s.organization,
+                               "Suggested category": s.category.value, "Evidence": f"{s.column}: “{s.evidence}”",
+                               "Rule check": s.rule_check, "Fit if categorized": s.fit_if_categorized}
+                              for s in result.category_suggestions])
+        edited = st.data_editor(table, hide_index=True, width="stretch",
+                                disabled=[c for c in table.columns if c != "Accept"],
+                                column_config={"Fit if categorized": st.column_config.NumberColumn(format="%.1f")})
+        chosen = edited[edited["Accept"]]
+        if st.button(f"Accept {len(chosen)} suggestion(s) and re-run", disabled=chosen.empty):
+            state.category_overrides.update(dict(zip(chosen["Email"], chosen["Suggested category"], strict=True)))
+            _run()
     review = [e for e in result.log if e.code == "POSSIBLE_PRIOR_INTRO"]
     if review or state.decisions:
         st.subheader("Possible prior introductions — decide before outreach")
