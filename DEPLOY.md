@@ -29,6 +29,19 @@ railway variables --service investor-match --set "RESEND_API_KEY=re_..."        
 
 Changing a variable redeploys the service.
 
+## Services
+
+| Project / service | URL | Source |
+|---|---|---|
+| `investor-match` / `investor-match` | <https://investor-match-production.up.railway.app> | CLI uploads from this folder |
+| `precious-celebration` / `web` | <https://web-production-a9900.up.railway.app> | CLI uploads from this folder (GitHub auto-deploy disconnected on 2026-09-30, because GitHub builds cannot include the built-in lists) |
+
+Pushing to the GitHub repo no longer deploys anything. To update `precious-celebration`:
+
+```bash
+railway up --project e0c7aff5-77d8-4510-8383-121abb005775 --environment production --service web --ci --no-gitignore
+```
+
 ## Deploy an update
 
 ```bash
