@@ -252,6 +252,13 @@ def step_inputs() -> None:
 
 # ------------------------------------------------------------------------------ 2. mapping
 
+def _widget_key(t, kind: str, index: int, name: str) -> str:
+    """Widget keys tied to the sheet's identity (file fingerprint + sheet), never just its position, so a
+    choice made for one sheet can never be applied to a different sheet that later takes that position."""
+    table = t.table
+    return f"{kind}-{name}-{table.sha256[:12]}-{table.filename}-{table.sheet or ''}-{index}"
+
+
 def _mapping_editor(t, specs, kind: str, index: int) -> None:
     table = t.table
     role_note = f" · {ROLE_LABELS[t.role]}" if kind == "investor" else ""
@@ -264,7 +271,7 @@ def _mapping_editor(t, specs, kind: str, index: int) -> None:
         if kind == "investor":
             roles = list(ROLE_LABELS)
             t.role = st.selectbox("Use this sheet as", roles, index=roles.index(t.role),
-                                  format_func=ROLE_LABELS.get, key=f"role-{index}",
+                                  format_func=ROLE_LABELS.get, key=_widget_key(t, kind, index, "role"),
                                   help="Unsubscribe lists remove every listed email from the results. "
                                        "Skipped sheets are not used.")
             if t.role_reason and t.role != ROLE_CONTACTS:
@@ -274,7 +281,7 @@ def _mapping_editor(t, specs, kind: str, index: int) -> None:
             if t.role == ROLE_SUPPRESSION:
                 current = t.mapping.get("email") or email_column_by_content(table) or UNMAPPED
                 choice = st.selectbox("Email column", options, index=options.index(current),
-                                      key=f"map-investor-{index}-email-suppression")
+                                      key=_widget_key(t, kind, index, "suppression-email"))
                 t.mapping["email"] = None if choice == UNMAPPED else choice
                 count = len(suppression_emails(table, t.mapping))
                 (st.caption if count else st.warning)(
@@ -285,14 +292,14 @@ def _mapping_editor(t, specs, kind: str, index: int) -> None:
         for i, spec in enumerate(specs):
             current = t.mapping.get(spec.key) or UNMAPPED
             choice = cols[i % 3].selectbox(spec.label, options, index=options.index(current),
-                                           key=f"map-{kind}-{index}-{spec.key}",
+                                           key=_widget_key(t, kind, index, f"map-{spec.key}"),
                                            help=("e.g. " + " · ".join(table.sample(current)))
                                            if current != UNMAPPED else None)
             t.mapping[spec.key] = None if choice == UNMAPPED else choice
         if kind == "intro" and not t.mapping.get("company"):
             t.company_specific = st.checkbox(
                 "This file lists introductions for this company only (no company column)",
-                value=t.company_specific, key=f"specific-{index}",
+                value=t.company_specific, key=_widget_key(t, kind, index, "specific"),
                 help="If unticked, matches from this file are held for review instead of excluded.")
         for problem in validate_mapping(t.mapping, kind, table):
             st.warning(problem)
@@ -385,9 +392,9 @@ def step_profile() -> None:
 
 
 def _run() -> None:
-    problems = [p for t in state.investors if t.role == ROLE_CONTACTS
-                for p in validate_mapping(t.mapping, "investor", t.table)]
-    problems += [p for t in state.intros for p in validate_mapping(t.mapping, "intro", t.table)]
+    # Unusable investor sheets are skipped by the pipeline (noted in the limitations); only intro lists,
+    # which have no skip option, must be mapped before running.
+    problems = [p for t in state.intros for p in validate_mapping(t.mapping, "intro", t.table)]
     if problems:
         st.error(" ".join(problems))
         return

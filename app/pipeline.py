@@ -24,6 +24,7 @@ from app.ingestion.mapping import (
     auto_map,
     detect_role,
     require_valid,
+    validate_mapping,
 )
 from app.ingestion.tables import ImportedTable, read_table_file
 from app.models import (
@@ -161,19 +162,34 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
                  category_overrides: dict[str, str] | None = None) -> RunResult:
     intro_decisions = intro_decisions or {}
     ctx = build_context(profile, user_aliases)
-    contact_tables = [t for t in investor_tables if t.role == ROLE_CONTACTS]
-    suppression_tables = [t for t in investor_tables if t.role == ROLE_SUPPRESSION]
+    # Sheets that cannot be used (no email/name columns) are skipped with a note — they never block a run,
+    # as long as at least one usable contact sheet remains.
+    limitations: list[str] = []
+    contact_tables, unusable = [], []
+    for t in investor_tables:
+        if t.role != ROLE_CONTACTS:
+            continue
+        problems = validate_mapping(t.mapping, "investor", t.table)
+        if problems:
+            unusable.append(problems)
+            limitations.append(f"Sheet {t.table.label} was not used: it has no mapped email and name columns.")
+        else:
+            contact_tables.append(t)
     if not contact_tables:
-        raise MappingError("No sheet is set to 'Investor contacts'. Set at least one investor-list sheet as contacts "
-                           "and map its email and name columns.")
-    for t in contact_tables:
-        require_valid(t.mapping, "investor", t.table)
+        detail = " ".join(p for problems in unusable for p in problems)
+        raise MappingError("No usable investor-contact sheet: set at least one sheet as 'Investor contacts' and map "
+                           "its email and name columns." + (f" ({detail})" if detail else ""))
+    suppression_tables = []
     suppression_list = {}
-    for t in suppression_tables:
+    for t in investor_tables:
+        if t.role != ROLE_SUPPRESSION:
+            continue
         emails = suppression_emails(t.table, t.mapping)
         if not emails:
-            raise MappingError(f"{t.table.label} is set as an unsubscribe list but no email column was found. "
-                               "Map its email column or skip the sheet.")
+            limitations.append(f"Sheet {t.table.label} is set as an unsubscribe list but has no email column; "
+                               "it was not used.")
+            continue
+        suppression_tables.append(t)
         for email, ref in emails.items():
             suppression_list.setdefault(email, ref)
     for t in intro_tables:
@@ -181,7 +197,6 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
 
     records = [r for t in contact_tables for r in build_records(t.table, t.mapping, cfg)]
     contacts, log = consolidate(records, cfg, suppression_list)
-    limitations: list[str] = []
 
     active = []
     for c in contacts:

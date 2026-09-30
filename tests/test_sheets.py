@@ -66,6 +66,32 @@ def test_unsubscribe_sheet_suppresses_primary_and_alternative_emails(cfg):
     assert any("unsubscribe sheet" in x for x in result.limitations)
 
 
+def test_sheets_without_email_or_name_never_block_the_run(cfg):
+    """Regression: Summary / Change Log / Sources sheets set as contacts used to stop the run with
+    'map a column to email / full_name or first_name'. They are now skipped with a note."""
+    import pytest
+
+    from app.errors import MappingError
+
+    data = workbook({
+        "Summary": [["Metric", "Value"], ["Rows", "41566"]],
+        "Master": [HEAD, row(), row(Email="kim@z.example", **{"First Name": "Kim"})],
+        "Change Log": [["Email", "Action"], ["pat.lee@fund.example", "merged"]],
+        "Sources": [["Source", "Rows"], ["Asana", "258"]],
+    })
+    tables = load_tables(data=data, filename="cleaned_1.xlsx")
+    for t in tables:
+        t.role = ROLE_CONTACTS            # as if every sheet had been set to 'Investor contacts'
+    result = run_matching(extract_profile(DEFAULT_DECK), tables, [], cfg, report_date=REPORT_DATE)
+    assert {s.contact.email for s in result.ranked} == {"pat.lee@fund.example", "kim@z.example"}
+    skipped = [x for x in result.limitations if "was not used" in x]
+    assert len(skipped) == 3 and all(n in " ".join(skipped) for n in ("Summary", "Change Log", "Sources"))
+
+    only_bad = [t for t in tables if t.table.sheet != "Master"]
+    with pytest.raises(MappingError, match="No usable investor-contact sheet"):
+        run_matching(extract_profile(DEFAULT_DECK), only_bad, [], cfg, report_date=REPORT_DATE)
+
+
 def test_real_vocabulary():
     from app.models import Contact
 
