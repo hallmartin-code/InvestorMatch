@@ -1,0 +1,184 @@
+{
+  "template_id": "investor_contact_shortlist",
+  "version": "1.0.0",
+  "document_title": "Investor Contact Shortlist",
+  "purpose": "One-page summary of a company's current raise and the qualified investor contacts for it: the deal profile extracted from the pitch deck, qualified contact counts by category, the top contacts per category with a fit rationale, material gaps and screening limitations, and the number of investors already introduced. Detailed contact information stays in the companion workbook.",
+  "rules": [
+    "The template holds structure only; every value is filled from a run.",
+    "Deal-profile values come only from the deck or from recorded user overrides; missing values read 'not stated in deck'.",
+    "Conflicting deck values are shown as conflicts, never resolved silently.",
+    "Only qualified contacts are shown; thin categories are never padded.",
+    "No emails, phone numbers or LinkedIn URLs on the page; they stay in the workbook.",
+    "Text is shortened (reduction ladder), never shrunk below the minimum body size."
+  ],
+  "page": {
+    "size": "US Letter",
+    "orientation": "portrait",
+    "width_pt": 612,
+    "height_pt": 792,
+    "margins_pt": {"left": 40, "right": 40, "top": 34, "bottom": 54},
+    "max_pages": 1,
+    "font_family": "Open Sans",
+    "body_size_pt": 9.0,
+    "min_body_size_pt": 9.0,
+    "palette": {"heading": "#1F3864", "ink": "#1F2328", "secondary_ink": "#4A5360", "muted": "#6B7380",
+                "rule": "#D9DDE3", "zebra": "#F5F7FA", "tint": "#EEF3FA", "group_header_text": "#FFFFFF"}
+  },
+  "header": {
+    "eyebrow": "TEN CAPITAL NETWORK · INVESTOR MATCH",
+    "title_pattern": "{company_name} — {document_title}",
+    "title_size_pt": 17,
+    "logo": {"file": "TEN_Capital_logo_footer.png", "width_in": 0.9, "position": "top right"},
+    "rule_below": true,
+    "meta_separator": "   ",
+    "meta_fields": [
+      {"key": "raise_line", "label": "Raise", "source": "deal.raise_amount · deal.stage · deal.instrument",
+       "format": "joined:' · '; stage and instrument omitted when not stated",
+       "placeholder": "[Raise amount] · [Stage] · [Instrument]", "empty_text": "not stated in deck"},
+      {"key": "report_date", "label": "Report date", "source": "run.report_date", "format": "date:Month D, YYYY",
+       "placeholder": "[Report date]"},
+      {"key": "deck_date", "label": "Deck date", "source": "deal.deck_date",
+       "format": "date as stated; '(file metadata)' suffix when taken from file properties",
+       "placeholder": "[Deck date]", "empty_text": "not stated in deck"}
+    ],
+    "company_placeholder": "[Company name]",
+    "company_empty_text": "Company not stated in deck"
+  },
+  "deal_fields": [
+    {"key": "company_name", "label": "Company", "placeholder": "[Company name]"},
+    {"key": "legal_name", "label": "Legal name", "placeholder": "[Legal entity name]"},
+    {"key": "sector", "label": "Sector", "placeholder": "[Sector]"},
+    {"key": "subsector", "label": "Subsector", "placeholder": "[Subsector(s)]"},
+    {"key": "stage", "label": "Stage", "placeholder": "[Stage]"},
+    {"key": "raise_amount", "label": "Raise amount", "placeholder": "[Raise amount]"},
+    {"key": "instrument", "label": "Instrument", "placeholder": "[Instrument]"},
+    {"key": "amount_committed", "label": "Amount committed (signed / committed)", "placeholder": "[Committed amount + signing status]"},
+    {"key": "soft_interest", "label": "Soft interest (not committed)", "placeholder": "[Soft interest]"},
+    {"key": "amount_remaining", "label": "Amount remaining", "placeholder": "[Remaining (stated or calculated)]"},
+    {"key": "company_geography", "label": "Company geography", "placeholder": "[Company location]"},
+    {"key": "target_investor_geography", "label": "Target investor geography", "placeholder": "[Target investor geography]"},
+    {"key": "target_close_date", "label": "Target close date", "placeholder": "[Target close date]"},
+    {"key": "deck_date", "label": "Deck date", "placeholder": "[Deck date]"}
+  ],
+  "fact_statuses": [
+    {"status": "Stated in deck", "meaning": "One value found in the deck; cited to its slide/page."},
+    {"status": "Classified from deck language", "meaning": "Sector/subsector inferred from deck vocabulary; confirm before sending."},
+    {"status": "Calculated", "meaning": "Remaining = raise − signed/committed, only for the same round, currency and date; shown with '(calculated)'."},
+    {"status": "File metadata", "meaning": "Deck date taken from file properties because no date is on the title or closing slide."},
+    {"status": "Conflicting figures", "meaning": "Different values in the deck; shown as 'conflicting figures — A vs B' and not used until resolved."},
+    {"status": "Not stated in deck", "meaning": "Not found; never guessed."}
+  ],
+  "sections": [
+    {
+      "id": "deal_profile",
+      "title": "Deal profile",
+      "row": 1,
+      "column": "left",
+      "type": "bullets",
+      "description": "5–6 compact bullets built from the effective deal profile (deck facts, or user overrides where recorded). Each bullet ends with the slide/page references of its facts.",
+      "source_markers": {"format": "[s{n}, p{n}]", "slide": "s", "page": "p", "override": "user override", "max_refs": 3},
+      "optional_segment_rule": "A [[...]] segment is dropped when its field is not stated or repeats the company name.",
+      "bullets": [
+        {"key": "identity", "pattern": "{company_name}[[ ({legal_name})]] — {sector}; {subsector}"},
+        {"key": "terms", "pattern": "Stage: {stage}; instrument: {instrument}"},
+        {"key": "raise", "pattern": "Raise: {raise_amount}; committed: {amount_committed}"},
+        {"key": "allocation", "pattern": "Remaining: {amount_remaining}; soft interest: {soft_interest}"},
+        {"key": "geography", "pattern": "Company: {company_geography}; target investors: {target_investor_geography}"},
+        {"key": "timing", "pattern": "Target close: {target_close_date}"}
+      ]
+    },
+    {
+      "id": "qualified_contacts",
+      "title": "Qualified contacts",
+      "row": 1,
+      "column": "right",
+      "type": "count_table",
+      "width_pt": 190,
+      "description": "Counts must equal the row counts in the companion workbook.",
+      "rows": [
+        {"key": "category_counts", "label": "{category}", "source": "count of Ranked Investors rows per category", "repeat": "categories", "placeholder": "[N]"},
+        {"key": "qualified_total", "label": "Total qualified (score ≥ {min_fit_score})", "source": "count of Ranked Investors rows", "emphasis": true, "placeholder": "[N]"},
+        {"key": "already_introduced", "label": "Already introduced — do not re-intro", "source": "count of Already Introduced rows", "placeholder": "[N]"},
+        {"key": "held_for_review", "label": "Held for review", "source": "count of REVIEW rows in Exclusions and Review", "placeholder": "[N]"}
+      ]
+    },
+    {
+      "id": "top_contacts",
+      "title": "Top contacts by category (full ranked list in the Excel export)",
+      "row": 2,
+      "column": "full",
+      "type": "grouped_table",
+      "description": "Up to the top contacts per category from the ranked list, in category order, then Fit Score, evidence completeness, organization and name.",
+      "group_by": "categories",
+      "group_header_pattern": "{category} — {count} qualified",
+      "max_rows_per_group": 3,
+      "empty_group_text": "No qualified contacts in this category.",
+      "columns": [
+        {"key": "rank", "label": "#", "source": "rank within category", "width_pt": 14, "placeholder": "#"},
+        {"key": "name", "label": "Name", "source": "contact first + last name", "width_pt": 92, "placeholder": "[Contact name]",
+         "empty_text": "(generic inbox — no named contact)"},
+        {"key": "organization", "label": "Organization", "source": "contact organization", "width_pt": 112, "max_chars": 40,
+         "placeholder": "[Organization]", "empty_text": "—"},
+        {"key": "score", "label": "Score", "source": "Fit Score (1–10)", "width_pt": 34, "format": "decimal:1", "placeholder": "[0.0]"},
+        {"key": "why", "label": "Why a fit", "source": "documented evidence per score component; inferences labelled '(inferred)'",
+         "width_pt": "remaining", "max_lines": 2, "placeholder": "[Evidence-based fit rationale]"}
+      ]
+    },
+    {
+      "id": "gaps_and_limitations",
+      "title": "Material gaps and screening limitations",
+      "row": 3,
+      "column": "full",
+      "type": "bullets",
+      "description": "Run limitations in priority order: deck conflicts, fields not established, calculated values, classification notes, prior-introduction screening completeness, review items, low-evidence contacts, email-deliverability disclaimer, OCR gaps.",
+      "max_items": 6,
+      "overflow_pattern": "{n} more limitation(s) listed on the Deal Profile sheet.",
+      "item_placeholder": "[Material gap or screening limitation]",
+      "closing_note": {
+        "pattern": "{already_introduced} investor(s) already introduced to this company are excluded (see Already Introduced, marked “do not re-intro”). Full exports: {workbook_file} — {sheet_list}. Contact details are kept in the spreadsheet only.",
+        "placeholders": {"already_introduced": "[N]", "workbook_file": "[workbook file name]"}
+      }
+    }
+  ],
+  "categories": [
+    {"key": "ANGEL", "label": "Angels", "definition": "Individual investors."},
+    {"key": "ANGEL_GROUP", "label": "Angel Groups & Syndicates", "definition": "Angel groups, networks and syndicates."},
+    {"key": "FAMILY_OFFICE", "label": "HNI & Family Offices", "definition": "High-net-worth individuals and single/multi-family offices."},
+    {"key": "VC", "label": "VCs (Seed & Early-Stage)", "definition": "Seed and early-stage venture funds, including corporate VCs."}
+  ],
+  "footer": {
+    "confidential_text": "Confidential – for recipients only.",
+    "confidential_size_pt": 8,
+    "standard_line_pattern": "{document_title}     {page}     Compiled on {report_date} by TEN Capital Network",
+    "standard_line_size_pt": 7,
+    "logo": {"file": "TEN_Capital_logo_footer.png", "width_in": 0.67, "height_in": 0.25, "position": "after standard line"}
+  },
+  "reduction_ladder": [
+    {"why_lines": 2, "limitations": 6, "profile_bullets": 6},
+    {"why_lines": 1, "limitations": 6, "profile_bullets": 6},
+    {"why_lines": 1, "limitations": 5, "profile_bullets": 6},
+    {"why_lines": 1, "limitations": 4, "profile_bullets": 6},
+    {"why_lines": 1, "limitations": 4, "profile_bullets": 5},
+    {"why_lines": 1, "limitations": 3, "profile_bullets": 5},
+    {"why_lines": 1, "limitations": 2, "profile_bullets": 5}
+  ],
+  "layout_checks": [
+    "exactly one page",
+    "every text span inside the page bounds",
+    "every shortlisted contact name present in full",
+    "confidential footer present",
+    "body text ≥ min_body_size_pt"
+  ],
+  "companion_workbook": {
+    "file_pattern": "{company_slug}_investor_match_{report_date:YYYY-MM-DD}.xlsx",
+    "sheet_rules": "Filters and frozen header row on every sheet; readable widths; text stored as literal strings (formula-safe); missing optional contact fields read 'needs research'.",
+    "sheets": [
+      {"name": "Ranked Investors", "columns": ["Category", "Fit Score", "First Name", "Last Name", "Organization", "Email", "Phone", "Investor Type", "Location", "Why a fit", "TEN Relationship (Y/N)", "LinkedIn"]},
+      {"name": "Already Introduced", "columns": ["Status", "First Name", "Last Name", "Organization", "Email", "Introduction Date", "Introduction Source", "Company in Source", "Match Basis", "In TEN Master List", "Master List Source", "Intro Status / Outcome"]},
+      {"name": "Deal Profile", "columns": ["Field", "Deck Value", "Status", "Slide/Page References", "Evidence Excerpt", "Override Value", "Override Reason", "Effective Value", "Notes"],
+       "blocks": ["Run information", "Input files", "Screening limitations"]},
+      {"name": "Exclusions and Review", "columns": ["Status", "Reason Code", "Reason", "First Name", "Last Name", "Organization", "Email", "Investor Type", "Source References", "Detail"]},
+      {"name": "Scoring Evidence", "columns": ["Status", "Category", "Rank", "Fit Score", "Evidence Completeness", "First Name", "Last Name", "Organization", "Email", "Sector (0-10)", "Sector Evidence", "Stage (0-10)", "Stage Evidence", "Check Size (0-10)", "Check Size Evidence", "Geography (0-10)", "Geography Evidence", "TEN Relationship (0-10)", "TEN Relationship Evidence", "Weighted Calculation", "Unknown / Flags", "Source References"]}
+    ]
+  }
+}

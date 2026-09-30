@@ -1,0 +1,45 @@
+{
+  "company": "Cardiolyte Health",
+  "report_date": "2026-09-30",
+  "counts": {
+    "qualified": {
+      "Angels": 9,
+      "Angel Groups & Syndicates": 6,
+      "HNI & Family Offices": 11,
+      "VCs (Seed & Early-Stage)": 11
+    },
+    "qualified_total": 37,
+    "already_introduced": 4,
+    "review": 5,
+    "excluded": 45
+  },
+  "stats": {
+    "investor_rows": 89,
+    "unique_contacts": 84,
+    "suppressed": 15,
+    "already_introduced": 4,
+    "already_introduced_in_master": 3,
+    "review": 5,
+    "excluded": 45,
+    "scored": 60,
+    "ranked": 37,
+    "org_capped": 2,
+    "intro_rows": 9,
+    "intro_relations": {
+      "this company": 6,
+      "possible alias": 1,
+      "other company": 2
+    }
+  },
+  "limitations": [
+    "Conflicting target close date in deck (December 15, 2026 vs Q1 2027); not used until resolved.",
+    "Remaining allocation $1.4M is calculated (raise \u2212 committed), not stated.",
+    "Sector/subsector classified from deck language; confirm before sending.",
+    "5 contact(s) held for review (ambiguous type or possible prior intro).",
+    "Email syntax was checked; deliverability was not verified."
+  ],
+  "outputs": [
+    "cardiolyte_health_investor_match_2026-09-30.pdf",
+    "cardiolyte_health_investor_match_2026-09-30.xlsx"
+  ]
+}

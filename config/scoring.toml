@@ -1,0 +1,69 @@
+# TEN Capital Investor Match — scoring and screening configuration.
+# Every run records a SHA-256 fingerprint of this file in the Deal Profile sheet.
+
+[weights]
+# Fit Score = Σ(component rating 0–10 × weight), rounded to one decimal. Weights must sum to 1.0.
+sector = 0.45
+stage = 0.15
+check_size = 0.15
+geography = 0.15
+ten_relationship = 0.10
+
+[thresholds]
+min_fit_score = 5.0          # keep contacts at or above this score
+org_cap = 3                  # max contacts per organization across the complete ranked list
+top_per_category_pdf = 3     # contacts shown per category in the one-page PDF
+
+[sector_ratings]
+niche_match = 10             # investor explicitly names one of the deal's subsectors
+broad_sector = 7             # investor names the deal's sector without a subsector
+adjacent_niche = 5           # investor names a different subsector in the same sector
+generalist = 3               # "generalist", "sector agnostic", "technology"
+outside = 0                  # stated focus is entirely outside the deal's sector
+
+[stage_ratings]
+named_stage = 10             # deal stage named explicitly (incl. inside a named range)
+early_stage_broad = 7        # covered only by "early stage"
+stage_agnostic = 5           # "all stages" / "stage agnostic"
+
+[check_ratings]
+meaningful_participation = 10  # min ≤ remaining and max ≥ participation floor
+small_participation = 6        # can participate, but max < participation floor
+min_exceeds_remaining = 0      # minimum check is larger than the remaining allocation
+solo_only_penalty = 4          # rating when the investor states it does not co-invest
+participation_floor_pct = 2.0  # % of remaining allocation that counts as meaningful
+
+[geography_ratings]
+local = 10                   # focus names the company's city, state or US sub-region
+country = 8
+region = 6                   # continental region (e.g. North America)
+global = 5
+inferred_same_state = 4      # no stated focus; investor located in the company's state (inference)
+inferred_same_country = 2    # no stated focus; investor located in the company's country (inference)
+
+[ten_relationship_points]
+core_list = 5                # explicitly documented TEN core-list status
+similar_client_intros = 3    # documented introductions to similar clients
+event_participation = 2      # documented TEN event participation
+
+[screening]
+generic_inbox_prefixes = [
+  "info", "contact", "hello", "hi", "admin", "office", "team", "invest", "investing", "investment",
+  "investments", "investors", "ir", "deals", "dealflow", "support", "sales", "general", "mail",
+  "enquiries", "inquiries", "founders", "pitch", "pitches", "submissions", "partners", "noreply",
+  "no-reply", "hr", "marketing",
+]
+suppression_terms = [
+  "unsubscribed", "unsubscribe", "opted out", "opt out", "opt-out", "suppressed", "do not contact",
+  "do not email", "dnc", "bounced", "hard bounce", "invalid", "spam", "removed",
+]
+intro_company_exact = 100    # alias match score (rapidfuzz) treated as the same company
+intro_company_ambiguous = 86 # alias similarity at or above this (but below exact) is flagged for review
+name_fuzzy_ambiguous = 90    # person-name similarity treated as a possible match
+
+[ocr]
+enabled = true
+max_pages = 40               # OCR budget per deck (pages/slides)
+low_text_chars = 40          # pages with less text than this are OCR'd
+image_area_ratio = 0.25      # also OCR pages/pictures covering at least this share of the page
+render_dpi = 150

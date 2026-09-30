@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+*.json.key
+service-account*.json
+data/
+output/*
+!output/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/

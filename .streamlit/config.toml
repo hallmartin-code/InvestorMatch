@@ -1,0 +1,40 @@
+[server]
+maxUploadSize = 100
+enableXsrfProtection = true
+headless = true
+# Serves app/static/ (favicon, touch icon, web manifest) at /app/static/.
+enableStaticServing = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = false
+
+# TEN Capital Network dark theme (see app/ui_theme.py for the component styles).
+[theme]
+base = "dark"
+primaryColor = "#EE5A4E"
+backgroundColor = "#0B1526"
+secondaryBackgroundColor = "#16283F"
+textColor = "#F3F6FA"
+linkColor = "#35BEBB"
+borderColor = "#1E354F"
+dataframeBorderColor = "#1E354F"
+dataframeHeaderBackgroundColor = "#101E33"
+codeBackgroundColor = "#0B1526"
+codeTextColor = "#C4D0E0"
+baseRadius = "12px"
+headingFontSizes = ["2.2rem", "1.6rem", "1.25rem", "1.05rem", "1rem", "0.9rem"]
+headingFontWeights = [700, 700, 600, 600, 600, 600]
+showWidgetBorder = true
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap, sans-serif"
+headingFont = "Sora:https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&display=swap, sans-serif"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap, monospace"
+chartCategoricalColors = ["#CFE2FB", "#79A9E3", "#3D6AA8", "#F3A22A", "#283548"]
+
+[theme.sidebar]
+backgroundColor = "#101E33"
+secondaryBackgroundColor = "#16283F"
+borderColor = "#1E354F"

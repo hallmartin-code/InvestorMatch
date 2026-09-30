@@ -1,0 +1,22 @@
+# Runtime
+pandas>=2.1
+openpyxl>=3.1
+xlrd>=2.0
+python-pptx>=1.0
+pymupdf>=1.24
+pydantic>=2.7
+pydantic-settings>=2.3
+reportlab>=4.2
+pillow>=10.0
+rapidfuzz>=3.6
+streamlit>=1.40
+# OCR for image-only slides (ONNX; no system binary needed)
+rapidocr-onnxruntime>=1.2
+# Optional Google Sheets export (service account)
+gspread>=6.0
+google-auth>=2.30
+# Optional Claude-assisted extraction (IM_LLM_ENABLED=true + ANTHROPIC_API_KEY)
+anthropic>=0.116,<1  # tested on 0.125; 1.x has breaking SDK changes
+
+# Development
+pytest>=8.0
