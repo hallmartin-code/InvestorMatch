@@ -18,10 +18,12 @@ from app.ingestion.mapping import (
     INTRO_FIELDS,
     INVESTOR_FIELDS,
     ROLE_CONTACTS,
+    ROLE_INTRO,
     ROLE_LABELS,
     ROLE_SKIP,
     ROLE_SUPPRESSION,
     auto_map,
+    detect_intro_role,
     detect_role,
     require_valid,
     validate_mapping,
@@ -69,6 +71,10 @@ def load_tables(path: Path | None = None, *, data: bytes | None = None, filename
         for t in inputs:
             t.role, t.role_reason = detect_role(t.table, t.mapping)
         _skip_subset_sheets(inputs)
+    else:
+        for t in inputs:
+            t.role, t.role_reason = detect_intro_role(t.table, t.mapping)
+        _skip_subset_sheets(inputs, role=ROLE_INTRO)
     return inputs
 
 
@@ -79,19 +85,19 @@ def _sheet_emails(t: TableInput) -> set[str]:
     return {normalize_email(r[column]) for r in t.table.rows if column and r.get(column)} - {""}
 
 
-def _skip_subset_sheets(inputs: list[TableInput], threshold: float = 0.98) -> None:
-    """A contact sheet whose emails are (almost) all on a larger contact sheet of the same file is a
-    segment/view of it (e.g. 'A-Priority' of 'Master'): skip it instead of merging thousands of duplicates."""
-    contacts = sorted((t for t in inputs if t.role == ROLE_CONTACTS), key=lambda t: -len(t.table.rows))
+def _skip_subset_sheets(inputs: list[TableInput], threshold: float = 0.98, role: str = ROLE_CONTACTS) -> None:
+    """A sheet whose emails are (almost) all on a larger sheet of the same role in the same file is a
+    segment/copy of it (e.g. 'A-Priority' of 'Master', 'INTERNAL' of a tracker): skip it."""
+    contacts = sorted((t for t in inputs if t.role == role), key=lambda t: -len(t.table.rows))
     emails = {id(t): _sheet_emails(t) for t in contacts}
     for i, small in enumerate(contacts):
         mine = emails[id(small)]
         if not mine:
             continue
         for big in contacts[:i]:
-            if big.role == ROLE_CONTACTS and len(mine & emails[id(big)]) >= threshold * len(mine):
+            if big.role == role and len(mine & emails[id(big)]) >= threshold * len(mine):
                 small.role = ROLE_SKIP
-                small.role_reason = f"its contacts are already on the larger sheet '{big.table.sheet}'"
+                small.role_reason = f"its rows are already on the larger sheet '{big.table.sheet}'"
                 break
 
 
@@ -112,12 +118,14 @@ def load_builtin_tables(path: Path) -> list[TableInput]:
 
 
 def builtin_suppression_tables(exclude: set[Path] = frozenset(), settings=None) -> list[TableInput]:
-    """Unsubscribe / suppression sheets of every built-in list — applied even when that list isn't selected."""
+    """Unsubscribe / suppression sheets of every Files API–connected list — applied even when that list isn't
+    selected."""
     from app.config import get_settings
+    from app.services.files_api import connected_investor_lists
 
     settings = settings or get_settings()
     out = []
-    for path in settings.builtin_investor_lists():
+    for path in connected_investor_lists(settings):
         if path in exclude:
             continue
         out += [t for t in load_builtin_tables(path) if t.role == ROLE_SUPPRESSION]
@@ -192,8 +200,16 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
         suppression_tables.append(t)
         for email, ref in emails.items():
             suppression_list.setdefault(email, ref)
+    usable_intros = []
     for t in intro_tables:
-        require_valid(t.mapping, "intro", t.table)
+        if t.role == ROLE_SKIP:
+            limitations.append(f"Introductions sheet {t.table.label} was not used ({t.role_reason or 'skipped'}).")
+        elif validate_mapping(t.mapping, "intro", t.table):
+            limitations.append(f"Introductions sheet {t.table.label} was not used: no investor email, name or "
+                               "organization column is mapped.")
+        else:
+            usable_intros.append(t)
+    all_intro_tables, intro_tables = intro_tables, usable_intros
 
     records = [r for t in contact_tables for r in build_records(t.table, t.mapping, cfg)]
     contacts, log = consolidate(records, cfg, suppression_list)
@@ -316,9 +332,13 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
         "intro_rows": len(intros), "intro_relations": screen.relation_counts,
     }
     files = []
-    for role, group in (("TEN Capital Investor List", investor_tables), ("Investor Introductions", intro_tables)):
+    used_intros = {id(t) for t in intro_tables}
+    for role, group in (("TEN Capital Investor List", investor_tables), ("Investor Introductions", all_intro_tables)):
         for t in group:
-            label = role if group is intro_tables else f"{role} — {ROLE_LABELS[t.role]}"
+            if group is all_intro_tables:
+                label = role if id(t) in used_intros else f"{role} — not used"
+            else:
+                label = f"{role} — {ROLE_LABELS[t.role]}"
             files.append({"Role": label, "File": t.table.filename, "Sheet": t.table.sheet or "",
                           "Rows": str(len(t.table.rows)), "SHA-256": t.table.sha256[:16],
                           "Company-specific": "Y" if t.company_specific else ""})

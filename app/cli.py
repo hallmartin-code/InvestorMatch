@@ -1,11 +1,11 @@
 """Headless runner.
 
     python -m app.cli --deck sample_data/cardiolyte_health_deck.pptx \
-        --investors sample_data/TEN_Capital_Investor_List_SAMPLE.xlsx \
         --intros sample_data/TEN_Intro_Tracker_2026.xlsx sample_data/cardiolyte_health_intros_Q3.csv \
         --out output
 
-Optional: --alias NAME (repeatable), --company-specific FILE (intro lists without a company column),
+Investor lists: only those connected through the Files API (--investors NAME, repeatable; default the
+newest). Optional: --alias NAME (repeatable), --company-specific FILE (intro lists without a company column),
 --overrides overrides.json ({"field": {"value": "...", "reason": "..."}}), --decisions decisions.json
 ({"email": "Treat as introduced" | "Treat as not introduced"}), --google, --date YYYY-MM-DD,
 --no-claude (skip Claude deck analysis when ANTHROPIC_API_KEY is set), --no-email (do not email results
@@ -36,6 +36,7 @@ from app.pipeline import (
 )
 from app.reports.frames import summary_counts
 from app.screening.introductions import file_mentions_alias
+from app.services.files_api import connected_investor_lists
 
 __all__ = ["main", "output_names"]
 
@@ -43,7 +44,9 @@ __all__ = ["main", "output_names"]
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TEN Capital Investor Match (headless)")
     parser.add_argument("--deck", required=True, type=Path)
-    parser.add_argument("--investors", type=Path, help="TEN Capital Investor List (default: configured project file)")
+    parser.add_argument("--investors", action="append", default=[],
+                        help="Name of a Files API-connected investor list (repeatable; default: the newest connected "
+                             "list). Investor-list spreadsheets outside the connected set are not accepted.")
     parser.add_argument("--intros", nargs="*", type=Path, default=[])
     parser.add_argument("--alias", action="append", default=[])
     parser.add_argument("--company-specific", nargs="*", type=Path, default=[])
@@ -59,9 +62,15 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     cfg = load_config(settings.im_config_path)
     try:
-        investors_path = args.investors or settings.default_investor_list()
-        if investors_path is None:
-            parser.error("No investor list: pass --investors or set IM_INVESTOR_LIST_PATH.")
+        connected = {p.name: p for p in connected_investor_lists(settings)}
+        if not connected:
+            parser.error("No investor list is connected through the Files API. Put it in data/investor_lists/ and "
+                         "run `python -m app.services.files_api`.")
+        unknown = [n for n in args.investors if Path(n).name not in connected]
+        if unknown:
+            parser.error(f"Not a Files API-connected investor list: {', '.join(unknown)}. "
+                         f"Connected lists: {', '.join(connected)}.")
+        chosen = [connected[Path(n).name] for n in args.investors] or [next(iter(connected.values()))]
         deck = load_deck(args.deck, cfg)
         client = None
         if settings.llm_available and not args.no_claude:
@@ -73,13 +82,9 @@ def main(argv: list[str] | None = None) -> int:
             for name, spec in json.loads(args.overrides.read_text(encoding="utf-8")).items():
                 profile.overrides[name] = make_override(profile, name, spec["value"], spec.get("reason", ""))
         aliases = args.alias + [a for a in (profile.effective("company_name"), profile.effective("legal_name")) if a]
-        builtin = settings.builtin_investor_lists()
-        if investors_path in builtin:
-            investors = load_builtin_tables(investors_path)
-        else:
-            investors = load_tables(investors_path)
-        # Unsubscribe sheets of every built-in list always apply.
-        investors += builtin_suppression_tables(exclude={investors_path}, settings=settings)
+        investors = [t for path in chosen for t in load_builtin_tables(path)]
+        # Unsubscribe sheets of every connected list always apply.
+        investors += builtin_suppression_tables(exclude=set(chosen), settings=settings)
         intros = []
         specific = {p.name for p in args.company_specific}
         for path in args.intros:

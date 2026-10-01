@@ -21,6 +21,33 @@ def _write(folder, name, sheets, age_s=0):
     return path
 
 
+def _connect(settings):
+    """Register every list in the folder with a fake Files API client."""
+    from types import SimpleNamespace
+
+    from app.services.files_api import sync_builtin_lists
+    from tests.test_files_api import FakeFiles
+
+    sync_builtin_lists(settings, SimpleNamespace(files=FakeFiles()))
+
+
+def test_only_files_api_connected_lists_are_used(tmp_path):
+    from app.services.files_api import connected_investor_lists
+
+    connected = _write(tmp_path, "connected.xlsx", {"Master": [HEAD, row()],
+                                                     "Unsubscribed": [["Email"], ["a@x.example"]]})
+    settings = Settings(im_investor_lists_dir=tmp_path)
+    _connect(settings)
+    not_synced = _write(tmp_path, "dropped_in_later.xlsx", {"Master": [HEAD, row()],
+                                                             "Unsubscribed": [["Email"], ["b@x.example"]]})
+    assert connected_investor_lists(settings) == [connected]          # new file is not connected until synced
+    assert not_synced in settings.builtin_investor_lists()
+    sheets = {t.table.filename for t in builtin_suppression_tables(settings=settings)}
+    assert sheets == {"connected.xlsx"}
+    connected.write_bytes(workbook({"Master": [HEAD, row(Email="changed@x.example")]}))
+    assert connected_investor_lists(settings) == []                   # a changed file must be re-synced
+
+
 def test_builtin_lists_newest_first_and_default(tmp_path):
     old = _write(tmp_path, "old.xlsx", {"Master": [HEAD, row()]}, age_s=3600)
     new = _write(tmp_path, "new.xlsx", {"Master": [HEAD, row()]})
@@ -45,6 +72,7 @@ def test_unsubscribe_sheets_of_unselected_builtin_lists_still_apply(tmp_path, cf
     _write(tmp_path, "other.xlsx", {"Master": [HEAD, row(Email="zed@q.example")],
                                     "Unsubscribed": [["Email"], ["pat.lee@fund.example"]]}, age_s=60)
     settings = Settings(im_investor_lists_dir=tmp_path)
+    _connect(settings)
     investors = load_builtin_tables(selected) + builtin_suppression_tables(exclude={selected}, settings=settings)
     assert [t.role for t in investors] == [ROLE_CONTACTS, ROLE_SUPPRESSION]
     result = run_matching(extract_profile(DEFAULT_DECK), investors, [], cfg, report_date=REPORT_DATE)

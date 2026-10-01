@@ -92,6 +92,41 @@ def test_sheets_without_email_or_name_never_block_the_run(cfg):
         run_matching(extract_profile(DEFAULT_DECK), only_bad, [], cfg, report_date=REPORT_DATE)
 
 
+def test_intro_workbook_dashboards_are_skipped_not_blocking(cfg):
+    """Regression: a client worksheet uploaded as introductions ('Campaign Dashboard', 'FAQs & Reference', an
+    empty tab and a copy of the tracker next to the real tracker) used to stop the run."""
+    from app.ingestion.mapping import ROLE_INTRO
+
+    tracker = [["Status", "Fund", "First Name", "Last Name", "Email"],
+               ["Intro sent", "Fund A", "Pat", "Lee", "pat.lee@fund.example"]]
+    data = workbook({
+        "Campaign Dashboard": [["", "TEN Capital Campaign Calendar", ""], ["", "Week 1", "Email blast"]],
+        "Investor Engagement Tracker": tracker,
+        "INTERNAL": tracker,
+        "TEN Internal": [["Account", "First Name", "Email"]],
+        "Investor Mailers": [["Email", "FirstName", "LastName", "_Variable_First Name"],
+                             ["kim@z.example", "Kim", "Park", "{{first}}"]],
+        "FAQs & Reference": [["FAQs & Reference", "", "Angel Group Platform Info"], ["What is TEN?", "", "…"]],
+    })
+    intros = load_tables(data=data, filename="acme_cardio_worksheet.xlsx", kind="intro")
+    roles = {t.table.sheet: t.role for t in intros}
+    assert roles == {"Campaign Dashboard": ROLE_SKIP, "Investor Engagement Tracker": ROLE_INTRO, "INTERNAL": ROLE_SKIP,
+                     "TEN Internal": ROLE_SKIP, "Investor Mailers": ROLE_INTRO, "FAQs & Reference": ROLE_SKIP}
+    mailers = next(t for t in intros if t.table.sheet == "Investor Mailers")
+    assert mailers.mapping["first_name"] == "FirstName"
+    for t in intros:
+        t.company_specific = True
+    investors = [investor(), investor(Email="kim@z.example", **{"First Name": "Kim", "Organization": "Org K"}),
+                 investor(Email="new@x.example", **{"First Name": "Neo", "Organization": "Org N"})]
+    from tests.conftest import investor_input
+
+    result = run_matching(extract_profile(DEFAULT_DECK), [investor_input(investors)], intros, cfg,
+                          report_date=REPORT_DATE)
+    assert {r["Email"] for r in result.already_introduced} == {"pat.lee@fund.example", "kim@z.example"}
+    assert [s.contact.email for s in result.ranked] == ["new@x.example"]
+    assert sum("Introductions sheet" in x and "not used" in x for x in result.limitations) == 4
+
+
 def test_real_vocabulary():
     from app.models import Contact
 

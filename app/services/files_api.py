@@ -54,6 +54,13 @@ def file_id_for(path: Path, settings: Settings | None = None) -> str | None:
     return None
 
 
+def connected_investor_lists(settings: Settings | None = None) -> list[Path]:
+    """Built-in lists whose current version is registered with the Files API (newest first). These are the only
+    investor lists the app uses; a list that is new or changed must be synced before it can be selected."""
+    settings = settings or get_settings()
+    return [p for p in settings.builtin_investor_lists() if file_id_for(p, settings)]
+
+
 def _client(settings: Settings):
     if not (settings.anthropic_api_key and settings.anthropic_api_key.get_secret_value()):
         raise LLMUnavailableError("ANTHROPIC_API_KEY is not set; cannot use the Files API.")

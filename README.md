@@ -29,7 +29,7 @@ python -m app.cli --deck sample_data/cardiolyte_health_deck.pptx \
     --investors sample_data/TEN_Capital_Investor_List_SAMPLE.xlsx \
     --intros sample_data/TEN_Intro_Tracker_2026.xlsx sample_data/cardiolyte_health_intros_Q3.csv \
     --out output
-pytest                                       # 76 tests
+pytest                                       # 79 tests
 ```
 
 Example outputs from that run are in [`sample_output/`](sample_output/). Python 3.11+.
@@ -79,13 +79,22 @@ classification, matching values are marked "Confirmed by Claude", and disagreeme
 user to resolve. The deck is passed as data in `<deck>` tags with an instruction to ignore instructions inside
 it. Screening, scoring and the template-driven PDF/Excel stay deterministic Python.
 
-## Built-in investor lists
+## Investor lists: Files API–connected only
 
-Trusted lists live in `data/investor_lists/` (or `IM_INVESTOR_LISTS_DIR`). The Inputs step offers them in a picker,
-newest first, with the newest selected by default; pick one or more, and upload other lists alongside if needed.
-Parsed files are cached per file version, so later runs skip re-reading them. **Unsubscribe sheets from every built-in list
-always apply**, even when that list isn't selected. Within a file, a contact sheet whose emails are already on a
-larger sheet (a segment such as "A-Priority" of "Master") is skipped automatically.
+Investor-list spreadsheets are **not uploaded** in the app. The only investor lists used for matching are the
+ones connected through the Anthropic Files API: files in `data/investor_lists/` whose current version has a file
+ID in `data/investor_lists/files_api.json`. A file that is added or changed is not offered until it is synced:
+
+```bash
+python -m app.services.files_api      # upload new/changed lists to the Files API and record their file IDs
+```
+
+The Inputs step offers the connected lists in a picker (newest first, newest selected); the CLI takes
+`--investors NAME` (repeatable; default the newest connected list) and rejects anything else. Because the Files API
+cannot return uploaded files, matching reads the app's own copy of each connected list; Claude reads the same file
+by file ID (see below). **Unsubscribe sheets from every connected list always apply**, even when that list isn't
+selected. Within a file, a sheet whose rows are already on a larger sheet (e.g. "A-Priority" of "Master") is
+skipped automatically. *Investor Introductions* trackers are still uploaded per run.
 
 ## Files API: Claude review of held contacts
 

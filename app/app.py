@@ -30,11 +30,13 @@ from app.ingestion.mapping import (  # noqa: E402
     ROLE_LABELS,
     ROLE_SKIP,
     ROLE_SUPPRESSION,
+    INTRO_ROLE_LABELS,
     email_column_by_content,
     validate_mapping,
 )
 from app.screening.contacts import suppression_emails  # noqa: E402
 from app.services import claude_review  # noqa: E402
+from app.services.files_api import connected_investor_lists  # noqa: E402
 from app.models import DEAL_FIELDS, FactStatus, LogStatus, refs_label  # noqa: E402
 from app.pipeline import (  # noqa: E402
     DECISION_INTRODUCED,
@@ -169,30 +171,28 @@ def disclosure_html() -> str:
 
 def step_inputs() -> None:
     hero = ui.hero("Investor Match", "Pitch Deck", "Investor Shortlist",
-                   "Upload a pitch deck and TEN Capital's investor lists to get a ranked investor shortlist, a "
+                   "Upload a pitch deck, choose TEN Capital's connected investor lists, and get a ranked investor shortlist, a "
                    "one-page PDF and a full workbook — analyzed by Claude and scored with TEN Capital's rubric.",
                    narrow=True)
     with hero:
         deck_file = st.file_uploader("Pitch deck", type=["pdf", "pptx", "ppt"], key="deck_upload",
                                      help="PDF, PPTX or legacy PPT. Image-only slides are read with OCR.")
-        builtin = settings.builtin_investor_lists()
+        connected = connected_investor_lists(settings)
         chosen: list = []
-        if builtin:
+        if connected:
             chosen = st.multiselect(
-                "TEN Capital investor lists (built-in)", builtin, default=builtin[:1],
-                format_func=_list_label,
-                help="Trusted lists stored with the app, newest first. Pick one or more; duplicates across lists "
-                     "are merged by email. Unsubscribe sheets from every built-in list always apply.")
-        left, right = st.columns(2)
-        inv_files = left.file_uploader("Other investor lists (optional)" if builtin else "TEN Capital Investor List",
-                                       type=["xlsx", "xls", "csv"], accept_multiple_files=True,
-                                       help="Excel or CSV. Column headers are mapped in the next step.")
-        default_list = None if builtin else settings.default_investor_list()
-        if default_list and not inv_files:
-            left.caption(f"No upload: the project list **{default_list.name}** will be used.")
-        intro_files = right.file_uploader("Investor Introductions lists (optional)", type=["xlsx", "xls", "csv"],
-                                          accept_multiple_files=True,
-                                          help="One or more files; used to exclude investors already introduced.")
+                "TEN Capital investor lists (connected through the Files API)", connected,
+                default=connected[:1], format_func=_list_label,
+                help="Only lists registered with the Anthropic Files API are used, newest first. Pick one or "
+                     "more; duplicates are merged by email. Unsubscribe sheets from every connected list always "
+                     "apply. Investor-list spreadsheets cannot be uploaded here.")
+        else:
+            st.error("No investor list is connected through the Files API. Put the list in data/investor_lists/, "
+                     "run `python -m app.services.files_api`, and redeploy.")
+        intro_files = st.file_uploader("Investor Introductions lists (optional)", type=["xlsx", "xls", "csv"],
+                                       accept_multiple_files=True,
+                                       help="One or more trackers of introductions already made; used to exclude "
+                                            "investors already introduced. Not investor lists.")
         aliases = st.text_input("Company name / aliases (optional)",
                                 placeholder="Other names the company has used, comma-separated",
                                 help="Used to recognize prior introductions recorded under another name.")
@@ -209,7 +209,7 @@ def step_inputs() -> None:
                 help="Claude opens the built-in list via its Files API copy and suggests a category, with a verified "
                      "quote, for held contacts that could reach the shortlist. You accept suggestions before they "
                      "are ranked.")
-        ready = deck_file is not None and bool(chosen or inv_files or default_list)
+        ready = deck_file is not None and bool(chosen)
         with st.container(key="tc-cta"):
             clicked = st.button("Analyze deck and investor lists →", type="primary", disabled=not ready,
                                 width="stretch")
@@ -229,10 +229,6 @@ def step_inputs() -> None:
                     investors = []
                     for path in chosen:
                         investors += load_builtin_tables(path)
-                    for f in inv_files or []:
-                        investors += load_tables(data=f.getvalue(), filename=f.name)
-                    if not investors and default_list:
-                        investors = load_tables(default_list)
                     investors += builtin_suppression_tables(exclude=set(chosen), settings=settings)
                 state.investors = investors
                 state.aliases = [a.strip() for a in aliases.split(",") if a.strip()]
@@ -261,13 +257,22 @@ def _widget_key(t, kind: str, index: int, name: str) -> str:
 
 def _mapping_editor(t, specs, kind: str, index: int) -> None:
     table = t.table
-    role_note = f" · {ROLE_LABELS[t.role]}" if kind == "investor" else ""
+    role_note = f" · {(ROLE_LABELS if kind == 'investor' else INTRO_ROLE_LABELS)[t.role]}"
     with st.expander(f"{table.label} — {len(table.rows)} rows{role_note}",
                      expanded=index == 0 or (kind == "investor" and t.role == ROLE_SUPPRESSION
                                              and len(table.rows) < 2000)):
         for warning in table.warnings:
             st.caption(f"ℹ {warning}")
         options = [UNMAPPED] + table.columns
+        if kind == "intro":
+            roles = list(INTRO_ROLE_LABELS)
+            t.role = st.selectbox("Use this sheet as", roles, index=roles.index(t.role),
+                                  format_func=INTRO_ROLE_LABELS.get, key=_widget_key(t, kind, index, "role"),
+                                  help="Skipped sheets (dashboards, FAQs, empty tabs) are not used.")
+            if t.role == ROLE_SKIP:
+                if t.role_reason:
+                    st.caption(f"Detected automatically: {t.role_reason}.")
+                return
         if kind == "investor":
             roles = list(ROLE_LABELS)
             t.role = st.selectbox("Use this sheet as", roles, index=roles.index(t.role),
@@ -392,12 +397,8 @@ def step_profile() -> None:
 
 
 def _run() -> None:
-    # Unusable investor sheets are skipped by the pipeline (noted in the limitations); only intro lists,
-    # which have no skip option, must be mapped before running.
-    problems = [p for t in state.intros for p in validate_mapping(t.mapping, "intro", t.table)]
-    if problems:
-        st.error(" ".join(problems))
-        return
+    # Sheets that cannot be used (investor lists or introductions) are skipped by the pipeline and noted in
+    # the screening limitations; they never block a run.
     try:
         with st.spinner("Screening and scoring…"):
             state.result = run_matching(state.profile, state.investors, state.intros, cfg,

@@ -76,8 +76,9 @@ INVESTOR_FIELDS: list[FieldSpec] = [
 INTRO_FIELDS: list[FieldSpec] = [
     FieldSpec("company", "Company introduced", ("company", "startup", "client", "company name", "portfolio company",
                                                 "deal", "introduced company", "client company")),
-    FieldSpec("first_name", "Investor first name", ("first name", "investor first name", "first")),
-    FieldSpec("last_name", "Investor last name", ("last name", "investor last name", "surname", "last")),
+    FieldSpec("first_name", "Investor first name", ("first name", "investor first name", "firstname", "first")),
+    FieldSpec("last_name", "Investor last name", ("last name", "investor last name", "lastname", "surname",
+                                                  "last")),
     FieldSpec("full_name", "Investor name", ("investor name", "investor", "name", "contact", "contact name")),
     FieldSpec("email", "Investor email", ("investor email", "email", "e mail", "email address")),
     FieldSpec("organization", "Investor organization", ("investor firm", "firm", "organization", "organisation",
@@ -167,6 +168,19 @@ ROLE_LABELS = {ROLE_CONTACTS: "Investor contacts", ROLE_SUPPRESSION: "Unsubscrib
 _SUPPRESSION_SHEET = re.compile(r"unsub|suppress|opt.?out|do.?not.?(contact|email)|\bdnc\b|bounce|blacklist|"
                                 r"block.?list|removed", re.I)
 _SUPPRESSION_VALUE = re.compile(r"^(unsub\w*|unsubscribed|opted.?out|suppressed|do not contact|dnc|bounced?)$", re.I)
+
+
+ROLE_INTRO = "introductions"
+INTRO_ROLE_LABELS = {ROLE_INTRO: "Investor introductions", ROLE_SKIP: "Skip this sheet"}
+
+
+def detect_intro_role(table: ImportedTable, mapping: dict[str, str | None]) -> tuple[str, str]:
+    """(role, reason) for an Investor Introductions sheet: dashboards, FAQs and empty sheets are skipped."""
+    if not table.rows:
+        return ROLE_SKIP, "the sheet has no data rows"
+    if validate_mapping(mapping, "intro", table):
+        return ROLE_SKIP, "no investor email, name or organization column could be identified — map one to use it"
+    return ROLE_INTRO, ""
 
 
 def detect_role(table: ImportedTable, mapping: dict[str, str | None]) -> tuple[str, str]:
