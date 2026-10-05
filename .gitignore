@@ -11,3 +11,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+# Google service-account key (never commit, never deploy)
+im-sheets.json

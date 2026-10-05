@@ -16,3 +16,5 @@ venv/
 tests/
 sample_output/
 .pytest_cache/
+# Google service-account key (never commit, never deploy)
+im-sheets.json

@@ -25,6 +25,11 @@ def test_dockerfile_cmd_expands_port():
     assert '"sh", "-c"' in cmd and "${PORT:-8501}" in cmd
 
 
+def test_google_key_is_never_committed_or_deployed():
+    for name in (".gitignore", ".railwayignore", ".dockerignore"):
+        assert "im-sheets.json" in (ROOT / name).read_text(encoding="utf-8").splitlines(), name
+
+
 def test_no_procfile():
     # A Procfile's `$PORT` start command is copied into Railway service settings and breaks Dockerfile deploys.
     assert not (ROOT / "Procfile").exists()
