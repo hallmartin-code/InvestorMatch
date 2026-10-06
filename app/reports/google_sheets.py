@@ -75,6 +75,11 @@ def export_to_google_sheets(result: RunResult, settings: Settings, title: str, c
     except ExportUnavailableError:
         raise
     except Exception as exc:  # noqa: BLE001 - gspread/google-auth raise many types
+        if "storage quota" in str(exc).lower():
+            raise ExportUnavailableError(
+                "Google Sheets export failed: the service account has no Drive storage of its own, so it cannot "
+                "create sheets in a My Drive folder. Set IM_GOOGLE_DRIVE_FOLDER_ID to a folder in a Shared Drive "
+                "where the service account is a Content manager. The PDF and Excel exports are unaffected.") from exc
         raise ExportUnavailableError(f"Google Sheets export failed ({exc.__class__.__name__}: {exc}). "
                                      "The PDF and Excel exports are unaffected.") from exc
     return spreadsheet.url

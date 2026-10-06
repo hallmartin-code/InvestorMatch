@@ -148,6 +148,15 @@ def test_google_sheets_export_with_fake_client(sample_result):
     assert client.spreadsheet.shared == [("analyst@tencapital.example", False)]   # never notifies by email
 
 
+def test_google_sheets_quota_error_explains_shared_drive(sample_result):
+    class QuotaClient:
+        def create(self, title, folder_id=None):
+            raise RuntimeError("APIError: [403]: The user's Drive storage quota has been exceeded.")
+
+    with pytest.raises(ExportUnavailableError, match="Shared Drive"):
+        export_to_google_sheets(sample_result, Settings(), "test", client=QuotaClient())
+
+
 def test_google_sheets_unconfigured_explains_setup(sample_result):
     settings = Settings(im_google_service_account_file=None, google_application_credentials=None)
     with pytest.raises(ExportUnavailableError, match="IM_GOOGLE_SERVICE_ACCOUNT_FILE"):
