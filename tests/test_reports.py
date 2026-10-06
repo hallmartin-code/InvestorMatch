@@ -157,6 +157,25 @@ def test_google_sheets_quota_error_explains_shared_drive(sample_result):
         export_to_google_sheets(sample_result, Settings(), "test", client=QuotaClient())
 
 
+def test_google_key_can_come_from_a_secret_variable(monkeypatch):
+    import json
+
+    import gspread
+
+    from app.reports.google_sheets import client_from_settings
+
+    key = {"type": "service_account", "client_email": "svc@example.iam.gserviceaccount.com", "private_key": "x"}
+    seen = {}
+    monkeypatch.setattr(gspread, "service_account_from_dict", lambda info: seen.setdefault("info", info))
+    settings = Settings(im_google_service_account_json=json.dumps(key), im_google_service_account_file=None,
+                        google_application_credentials=None)
+    assert settings.google_sheets_configured
+    client_from_settings(settings)
+    assert seen["info"]["client_email"] == key["client_email"]
+    assert not Settings(im_google_service_account_json="not json", im_google_service_account_file=None,
+                        google_application_credentials=None).google_sheets_configured
+
+
 def test_google_sheets_unconfigured_explains_setup(sample_result):
     settings = Settings(im_google_service_account_file=None, google_application_credentials=None)
     with pytest.raises(ExportUnavailableError, match="IM_GOOGLE_SERVICE_ACCOUNT_FILE"):

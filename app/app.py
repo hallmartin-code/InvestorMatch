@@ -512,7 +512,7 @@ def step_export() -> None:
     c2.download_button("Download Excel workbook", xlsx, xlsx_name,
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
     st.subheader("Google Sheets")
-    if settings.google_credentials_file is None:
+    if not settings.google_sheets_configured:
         from app.reports.google_sheets import ENABLE_INSTRUCTIONS
 
         st.info(ENABLE_INSTRUCTIONS)

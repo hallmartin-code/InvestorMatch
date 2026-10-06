@@ -17,7 +17,8 @@ ENABLE_INSTRUCTIONS = (
     "Google Sheets export is not configured. To enable it: (1) in Google Cloud, create a service account and "
     "enable the Google Sheets and Google Drive APIs; (2) download its JSON key and store it outside the "
     "project (never commit it); (3) set IM_GOOGLE_SERVICE_ACCOUNT_FILE (or GOOGLE_APPLICATION_CREDENTIALS) to "
-    "that path in .env; (4) optionally set IM_GOOGLE_DRIVE_FOLDER_ID to a folder shared with the service "
+    "that path in .env — or, on a hosted deployment such as Railway, put the key's JSON content in the secret "
+    "variable IM_GOOGLE_SERVICE_ACCOUNT_JSON; (4) optionally set IM_GOOGLE_DRIVE_FOLDER_ID to a folder shared with the service "
     "account, and IM_GOOGLE_SHARE_WITH to the addresses that should get access. The PDF and Excel exports "
     "are complete without it."
 )
@@ -40,15 +41,16 @@ def _grid(sheet) -> list[list[Any]]:
 
 
 def client_from_settings(settings: Settings):
-    path = settings.google_credentials_file
-    if path is None:
+    """Key content (IM_GOOGLE_SERVICE_ACCOUNT_JSON, hosted) takes precedence over a key file (local)."""
+    info, path = settings.google_credentials_info, settings.google_credentials_file
+    if info is None and path is None:
         raise ExportUnavailableError(ENABLE_INSTRUCTIONS)
     try:
         import gspread
     except ImportError as exc:
         raise ExportUnavailableError("Install the 'gspread' package (pip install -r requirements.txt). "
                                      + ENABLE_INSTRUCTIONS) from exc
-    return gspread.service_account(filename=str(path))
+    return gspread.service_account_from_dict(info) if info else gspread.service_account(filename=str(path))
 
 
 def export_to_google_sheets(result: RunResult, settings: Settings, title: str, client: Any = None) -> str:

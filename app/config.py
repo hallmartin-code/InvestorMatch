@@ -72,9 +72,11 @@ class Settings(BaseSettings):
             return self.im_public_url
         return f"https://{self.railway_public_domain}" if self.railway_public_domain else None
 
-    # Optional Google Sheets export (service account JSON file; never commit it).
+    # Optional Google Sheets export: a service-account key as a file path (local) or as the JSON content itself
+    # (hosted deployments such as Railway, where the key is a secret variable). Never commit the key.
     im_google_service_account_file: Path | None = None
     google_application_credentials: Path | None = None
+    im_google_service_account_json: SecretStr | None = None
     im_google_share_with: str = ""          # comma-separated addresses; shared without notification email
     im_google_drive_folder_id: str = ""
 
@@ -88,6 +90,24 @@ class Settings(BaseSettings):
             if candidate and Path(candidate).is_file():
                 return Path(candidate)
         return None
+
+    @property
+    def google_credentials_info(self) -> dict | None:
+        """The service-account key from IM_GOOGLE_SERVICE_ACCOUNT_JSON, if it holds a valid key."""
+        import json
+
+        raw = self.im_google_service_account_json.get_secret_value().strip() if self.im_google_service_account_json else ""
+        if not raw:
+            return None
+        try:
+            info = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return info if isinstance(info, dict) and info.get("type") == "service_account" else None
+
+    @property
+    def google_sheets_configured(self) -> bool:
+        return self.google_credentials_info is not None or self.google_credentials_file is not None
 
     def builtin_investor_lists(self) -> list[Path]:
         """Trusted, built-in investor lists (``data/investor_lists/`` or IM_INVESTOR_LISTS_DIR), newest first."""

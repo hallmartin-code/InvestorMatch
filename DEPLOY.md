@@ -19,12 +19,15 @@ Current deployment: project **investor-match**, service **investor-match**,
 | `RESEND_API_KEY` | Resend key from <https://resend.com/api-keys> (sending access) |
 | `IM_NOTIFY_TO` | `Info@tencapital.group` (comma-separated for several) |
 | `IM_NOTIFY_FROM` | Default `TEN Capital Investor Match <reports@tencapital.group>` — domain must be verified in Resend |
-| `IM_GOOGLE_SERVICE_ACCOUNT_FILE` etc. | Optional Google Sheets export (see README) |
+| `IM_GOOGLE_SERVICE_ACCOUNT_JSON` | Google service-account key **content** (JSON) for Sheets export — set from the key file via stdin, never on the command line |
+| `IM_GOOGLE_DRIVE_FOLDER_ID` | `0AEWCMgOR3jJtUk9PVA` — the *TEN Capital AI Documents* Shared Drive (service accounts cannot create files in My Drive) |
+| `IM_GOOGLE_SHARE_WITH` | `hallmartin@tencapital.group` |
 
 ```bash
 railway variables --service investor-match --set "ANTHROPIC_API_KEY=sk-ant-..."   # rotate / replace a key
 railway variables --service investor-match --set "TEN_APP_PASSWORD=..."           # change the password
 railway variables --service investor-match --set "RESEND_API_KEY=re_..."            # replace the Resend key
+railway variables --service investor-match --set-from-stdin IM_GOOGLE_SERVICE_ACCOUNT_JSON < im-sheets.json   # replace the Google key
 ```
 
 Changing a variable redeploys the service.
