@@ -40,8 +40,24 @@ def clean_cell(value: object) -> str:
             return ""
         if value.is_integer():
             value = int(value)
-    text = _WS.sub(" ", str(value)).strip()
+    text = repair_mojibake(_WS.sub(" ", str(value)).strip())
     return "" if text.lower() in _EMPTY_TOKENS else text
+
+
+# UTF-8 lead bytes read as Windows-1252 (Â, Ã, Å, â) followed by a continuation-byte character.
+_MOJIBAKE = re.compile("[\u00c2\u00c3\u00c5\u00e2][\u0080-\u00bf\u0152\u0153\u0160\u0161\u0178"
+                       "\u017d\u017e\u0192\u02c6\u02dc\u2013-\u2122]")
+
+
+def repair_mojibake(text: str) -> str:
+    """Undo UTF-8 text that was decoded as Windows-1252 (e.g. 'ÃŽle-de-France' → 'Île-de-France').
+    Applied only when the tell-tale character pairs are present and the round trip is clean."""
+    if not text or not _MOJIBAKE.search(text):
+        return text
+    try:
+        return text.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
 
 
 def truncate(text: str | None, limit: int, ellipsis: str = "…") -> str:

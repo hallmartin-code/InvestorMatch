@@ -60,7 +60,9 @@ railway logs --service investor-match      # runtime logs
 `--no-gitignore`; without it the lists are left out and the app falls back to uploads. A deploy triggered from the
 Only lists connected through the Files API are offered in the app (no investor-list uploads). To add or replace a list, put the file in `data/investor_lists/`, run
 `python -m app.services.files_api` (uploads it to the Anthropic Files API and records its file ID in
-`data/investor_lists/files_api.json`), then redeploy. File IDs work only with the same Anthropic organization's
+`data/investor_lists/files_api.json`, together with its investor count), then redeploy. Give each list a display
+name and status in `data/investor_lists/catalog.json` — `recommended` (the official list, shown first with a
+badge and pre-selected), `current`, or `archived` (grouped under "Archived versions") — plus a one-line note. File IDs work only with the same Anthropic organization's
 API key; if you change `ANTHROPIC_API_KEY` to a key from another organization, run the sync again.
 
 ## Cost and safety

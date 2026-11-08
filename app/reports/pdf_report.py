@@ -26,6 +26,8 @@ from app.models import CATEGORY_ORDER, NOT_STATED_TEXT, RunResult
 from app.reports import theme as th
 from app.reports.frames import summary_counts
 from app.reports.template import ReportTemplate, Rung, load_template
+from app.screening.review import incomplete_name
+from app.screening.scoring import compact_why
 from app.utils.text import truncate
 
 TEMPLATE: ReportTemplate = load_template()
@@ -57,6 +59,7 @@ class ContactRow:
     organization: str
     score: str
     why: str
+    generic: bool = False
 
 
 @dataclass
@@ -122,6 +125,16 @@ def fit_width(text: str, width: float, font_name: str, size: float = BODY_PT) ->
     return truncate(text, max(lo, 1))
 
 
+def fit_phrases(text: str, width: float, font_name: str, size: float = BODY_PT, sep: str = " · ") -> str:
+    """Keep whole rationale phrases (dropping from the end) so the text fits ``width`` without an ellipsis;
+    falls back to ``fit_width`` only when even the first phrase is too long."""
+    measure = lambda t: pdfmetrics.stringWidth(t, font_name, size)  # noqa: E731
+    parts = text.split(sep)
+    while len(parts) > 1 and measure(sep.join(parts)) > width:
+        parts.pop()
+    return sep.join(parts) if measure(sep.join(parts)) <= width else fit_width(parts[0], width, font_name, size)
+
+
 def _fmt_date(d) -> str:
     return f"{d:%B} {d.day}, {d.year}"
 
@@ -134,12 +147,12 @@ def data_from_result(result: RunResult, workbook_file: str) -> ShortlistData:
     parts = [d("raise_amount")] + [d(k) for k in ("stage", "instrument") if d(k) != NOT_STATED_TEXT]
     counts = summary_counts(result)
     rows_spec = {r.key: r for r in _SEC["qualified_contacts"].rows}
-    count_rows = [(cat, str(n)) for cat, n in counts["qualified"].items()]
+    count_rows = [(cat, f"{n:,}") for cat, n in counts["qualified"].items()]
     count_rows += [
         (rows_spec["qualified_total"].label.format(min_fit_score=result.config["thresholds"]["min_fit_score"]),
-         str(counts["qualified_total"])),
-        (rows_spec["already_introduced"].label, str(counts["already_introduced"])),
-        (rows_spec["held_for_review"].label, str(counts["review"])),
+         f"{counts['qualified_total']:,}"),
+        (rows_spec["already_introduced"].label, f"{counts['already_introduced']:,}"),
+        (rows_spec["held_for_review"].label, f"{counts['review']:,}"),
     ]
     per_group = _TOP_X["max_rows_per_group"]
     name_col, org_col = (next(c for c in _TOP.columns if c.key == k) for k in ("name", "organization"))
@@ -147,19 +160,24 @@ def data_from_result(result: RunResult, workbook_file: str) -> ShortlistData:
     for cat in CATEGORY_ORDER:
         members = [x for x in result.ranked if x.category == cat]
         header = _TOP_X["group_header_pattern"].format(category=cat.value, count=len(members))
+        # Named people first; general inboxes only fill remaining slots (rank numbers stay the real ranks).
+        shown = sorted(members, key=lambda x: (x.contact.generic_inbox or not x.contact.full_name,
+                                                   incomplete_name(x.contact), x.rank or 0))
         rows = []
-        for x in members[:per_group]:
+        for x in shown[:per_group]:
             c = x.contact
-            if c.full_name:
+            generic = c.generic_inbox or not c.full_name
+            if c.full_name and not generic:
                 names.append(c.full_name)
-            rows.append(ContactRow(str(x.rank), c.full_name or name_col.empty_text,
+            rows.append(ContactRow(str(x.rank), name_col.empty_text if generic else c.full_name,
                                    truncate(c.organization, org_col.max_chars) or org_col.empty_text,
-                                   f"{x.fit_score:.1f}", x.why))
+                                   f"{x.fit_score:.1f}", " · ".join(compact_why(x.components)), generic))
         groups.append((header, rows))
     return ShortlistData(
         company=result.context.company_name or TEMPLATE.header["company_empty_text"],
         raise_line=" · ".join(parts), report_date=_fmt_date(result.report_date), deck_date=d("deck_date"),
-        bullets=profile_bullets(result.deal, result.context, limit=len(_SEC["deal_profile"].bullets)),
+        bullets=profile_bullets(result.deal, result.context, limit=len(_SEC["deal_profile"].bullets),
+                                with_refs=False),
         count_rows=count_rows, groups=groups, limitations=list(result.limitations),
         already_introduced=str(counts["already_introduced"]), workbook_file=workbook_file, required_names=names)
 
@@ -195,7 +213,7 @@ def _profile_and_counts(data: ShortlistData, s: dict, rung: Rung) -> list:
     total_row = len(CATEGORY_ORDER)
     rows[total_row][0] = Paragraph(f"<b>{_e(data.count_rows[total_row][0])}</b>", s["cell"])
     right_w = (counts.model_extra or {}).get("width_pt", 190)
-    grid = Table(rows, colWidths=[right_w - 34, 34])
+    grid = Table(rows, colWidths=[right_w - 46, 46])
     grid.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), _PAL["zebra"]), ("BACKGROUND", (0, total_row), (-1, total_row), _PAL["tint"]),
         ("LINEBELOW", (0, 0), (-1, -2), 0.4, th.WHITE), ("LINEABOVE", (0, total_row), (-1, total_row), 0.8, _PAL["heading"]),
@@ -226,8 +244,9 @@ def _top_contacts(data: ShortlistData, s: dict, rung: Rung) -> list:
             styles.append(("SPAN", (0, len(table_rows) - 1), (-1, len(table_rows) - 1)))
             continue
         for row in rows:
-            why = fit_width(row.why, why_width, s["cell"].fontName) if data.fit_rationale else row.why
-            table_rows.append([Paragraph(_e(row.rank), s["cell"]), Paragraph(_e(row.name), s["cell_b"]),
+            why = fit_phrases(row.why, why_width, s["cell"].fontName) if data.fit_rationale else row.why
+            table_rows.append([Paragraph(_e(row.rank), s["cell"]),
+                               Paragraph(_e(row.name), s["muted"] if row.generic else s["cell_b"]),
                                Paragraph(_e(row.organization), s["cell"]), Paragraph(_e(row.score), s["cell_c"]),
                                Paragraph(_e(why), s["cell"])])
     table = Table(table_rows, colWidths=WIDTHS + [WHY_W])

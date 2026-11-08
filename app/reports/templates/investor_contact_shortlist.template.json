@@ -83,7 +83,7 @@
         {"key": "terms", "pattern": "Stage: {stage}; instrument: {instrument}"},
         {"key": "raise", "pattern": "Raise: {raise_amount}; committed: {amount_committed}"},
         {"key": "allocation", "pattern": "Remaining: {amount_remaining}; soft interest: {soft_interest}"},
-        {"key": "geography", "pattern": "Company: {company_geography}; target investors: {target_investor_geography}"},
+        {"key": "geography", "pattern": "Location: {company_geography}; target investors: {target_investor_geography}"},
         {"key": "timing", "pattern": "Target close: {target_close_date}"}
       ]
     },
@@ -116,7 +116,7 @@
       "columns": [
         {"key": "rank", "label": "#", "source": "rank within category", "width_pt": 14, "placeholder": "#"},
         {"key": "name", "label": "Name", "source": "contact first + last name", "width_pt": 92, "placeholder": "[Contact name]",
-         "empty_text": "(generic inbox — no named contact)"},
+         "empty_text": "General inbox"},
         {"key": "organization", "label": "Organization", "source": "contact organization", "width_pt": 112, "max_chars": 40,
          "placeholder": "[Organization]", "empty_text": "—"},
         {"key": "score", "label": "Score", "source": "Fit Score (1–10)", "width_pt": 34, "format": "decimal:1", "placeholder": "[0.0]"},

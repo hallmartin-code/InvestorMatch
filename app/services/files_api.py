@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,63 @@ def connected_investor_lists(settings: Settings | None = None) -> list[Path]:
     return [p for p in settings.builtin_investor_lists() if file_id_for(p, settings)]
 
 
+def count_investors(path: Path) -> int:
+    """Unique valid emails on the list's contact sheets (what the picker shows as 'N investors')."""
+    from app.ingestion.mapping import ROLE_CONTACTS
+    from app.pipeline import load_builtin_tables
+    from app.utils.text import is_valid_email, normalize_email
+
+    emails = set()
+    for t in load_builtin_tables(path):
+        column = t.mapping.get("email")
+        if t.role == ROLE_CONTACTS and column:
+            emails |= {e for e in (normalize_email(r.get(column, "")) for r in t.table.rows) if is_valid_email(e)}
+    return len(emails)
+
+
+CATALOG_NAME = "catalog.json"
+_DATE_IN_NAME = re.compile(r"(20\d\d)-(\d\d)-(\d\d)")
+
+
+def _list_date(path: Path, meta: dict[str, Any]) -> datetime:
+    """When the list was compiled: catalog ``date``, else a YYYY-MM-DD date in the file name, else the file's
+    modified time (deployments reset modified times, so the first two are preferred)."""
+    for text in (meta.get("date") or "", path.name):
+        m = _DATE_IN_NAME.search(text)
+        if m:
+            try:
+                return datetime(int(m[1]), int(m[2]), int(m[3]))
+            except ValueError:
+                pass
+    return datetime.fromtimestamp(path.stat().st_mtime)
+
+
+def list_catalog(settings: Settings | None = None) -> list[dict[str, Any]]:
+    """Connected lists with display name, status ('recommended' | 'current' | 'archived'), note, investor
+    count and update date — for the picker. Display data comes from the curated ``catalog.json`` next to the
+    lists; a list missing from it is shown under its file name as 'current'."""
+    settings = settings or get_settings()
+    folder = Path(settings.im_investor_lists_dir)
+    try:
+        catalog = json.loads((folder / CATALOG_NAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        catalog = {}
+    registry = load_registry(settings)
+    out = []
+    for path in connected_investor_lists(settings):
+        meta = catalog.get(path.name, {})
+        out.append({
+            "path": path,
+            "label": meta.get("label") or path.stem.replace("_", " "),
+            "status": meta.get("status", "current"),
+            "note": meta.get("note", ""),
+            "contacts": registry.get(path.name, {}).get("contacts"),
+            "updated": _list_date(path, meta),
+        })
+    order = {"recommended": 0, "current": 1, "archived": 2}
+    return sorted(out, key=lambda x: (order.get(x["status"], 1), -x["updated"].timestamp()))
+
+
 def _client(settings: Settings):
     if not (settings.anthropic_api_key and settings.anthropic_api_key.get_secret_value()):
         raise LLMUnavailableError("ANTHROPIC_API_KEY is not set; cannot use the Files API.")
@@ -81,6 +139,7 @@ def sync_builtin_lists(settings: Settings | None = None, client: Any = None) -> 
         if entry and entry.get("sha256") == sha:
             try:
                 client.files.retrieve_metadata(entry["file_id"])
+                entry.setdefault("contacts", count_investors(path))
                 continue                                   # still stored at Anthropic: reuse
             except Exception:  # noqa: BLE001 - deleted or unknown ID: upload again
                 LOGGER.info("Files API ID for %s is no longer valid; re-uploading", name)
@@ -88,7 +147,8 @@ def sync_builtin_lists(settings: Settings | None = None, client: Any = None) -> 
         with path.open("rb") as handle:
             uploaded = client.files.upload(file=(name, handle, mime))
         registry[name] = {"file_id": uploaded.id, "sha256": sha, "size_bytes": path.stat().st_size,
-                          "uploaded_at": datetime.now(UTC).isoformat(timespec="seconds")}
+                          "uploaded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                          "contacts": count_investors(path)}
         LOGGER.info("Uploaded %s to the Files API", name)
     for stale in set(registry) - set(present):
         registry.pop(stale)

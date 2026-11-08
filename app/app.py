@@ -36,8 +36,8 @@ from app.ingestion.mapping import (  # noqa: E402
 )
 from app.screening.contacts import suppression_emails  # noqa: E402
 from app.services import claude_review  # noqa: E402
-from app.services.files_api import connected_investor_lists  # noqa: E402
-from app.models import DEAL_FIELDS, FactStatus, LogStatus, refs_label  # noqa: E402
+from app.services.files_api import list_catalog  # noqa: E402
+from app.models import DEAL_FIELDS, FactStatus, LogStatus  # noqa: E402
 from app.pipeline import (  # noqa: E402
     DECISION_INTRODUCED,
     DECISION_NEW,
@@ -52,7 +52,27 @@ from app.pipeline import (  # noqa: E402
     render_outputs,
     run_matching,
 )
-from app.reports.frames import RANKED_COLUMNS, exclusion_rows, EXCLUSION_COLUMNS, ranked_rows, summary_counts  # noqa: E402
+from app.reports.frames import (  # noqa: E402
+    EXCLUSION_COLUMNS,
+    NEEDS_RESEARCH,
+    RANKED_COLUMNS,
+    exclusion_rows,
+    ranked_rows,
+    summary_counts,
+)
+from app.screening.review import (  # noqa: E402
+    action_warnings,
+    contact_note,
+    held_breakdown,
+    held_contacts,
+    held_rows,
+    likely_candidate,
+    projected_rank,
+    unmapped_score_fields,
+)
+from app.screening.scoring import compact_why  # noqa: E402
+from app.services.notifications import generation_key  # noqa: E402
+from app.utils.text import truncate  # noqa: E402
 from app.screening.introductions import file_mentions_alias  # noqa: E402
 
 st.set_page_config(page_title="TEN Capital Network — Investor Match",
@@ -60,8 +80,9 @@ st.set_page_config(page_title="TEN Capital Network — Investor Match",
                    initial_sidebar_state="collapsed")
 ui.apply_theme()
 
-STEPS = ["Inputs", "Column mapping", "Deal profile", "Results & review", "Export"]
+STEPS = ["Inputs", "Mapping", "Profile", "Review", "Export"]
 UNMAPPED = "(unmapped)"
+STALE_LIST_DAYS = 30
 settings = get_settings()
 cfg = load_config(settings.im_config_path)
 state = st.session_state
@@ -73,6 +94,9 @@ for key, default in (("step", 0), ("deck", None), ("profile", None), ("investors
 
 if "_goto" in state:  # programmatic navigation, applied before the step widget is created
     state.step = state.pop("_goto")
+if "_toast" in state:  # confirmations queued before a rerun (a toast shown right before st.rerun is lost)
+    _msg, _icon = state.pop("_toast")
+    st.toast(_msg, icon=_icon)
 
 
 def go(step: int) -> None:
@@ -102,10 +126,9 @@ kept; each organization is capped at {cfg['thresholds']['org_cap']} contacts.
 """
 
 
-def _list_label(path: Path) -> str:
-    from datetime import date
-
-    return f"{path.name}  ·  updated {date.fromtimestamp(path.stat().st_mtime):%b %d, %Y}"
+def _md(text: str) -> str:
+    """Literal dollar signs in Markdown (otherwise "$2.5M … $1.1M" renders as a math formula)."""
+    return text.replace("$", "\\$")
 
 
 def _tmp_path(name: str, data: bytes) -> Path:
@@ -143,93 +166,185 @@ def password_gate() -> bool:
 if not password_gate():
     st.stop()
 
-ui.brand()
-_enabled = {0} | ({1, 2} if state.profile is not None else set()) | ({3, 4} if state.result is not None else set())
-_clicked = ui.step_nav(STEPS, state.step, {i for i in _enabled if i < state.step}, _enabled)
+ui.brand(None)
+
+
+def _locked_steps() -> dict[int, str]:
+    """Steps that cannot be opened yet, with the reason shown as tooltip and toast."""
+    if state.profile is None:
+        reason = "Upload a pitch deck and click Analyze to unlock this step."
+        return {1: reason, 2: reason, 3: reason, 4: reason}
+    if state.result is None:
+        reason = "Run matching on the Profile step to unlock this step."
+        return {3: reason, 4: reason}
+    return {}
+
+
+_locked = _locked_steps()
+_done = {i for i in range(len(STEPS)) if i < state.step and i not in _locked}
+_clicked = ui.step_nav(STEPS, state.step, _done, _locked)
 if _clicked is not None and _clicked != state.step:
-    navigate(_clicked)
-with st.sidebar:
-    ui.brand(None)
-    with st.expander("Fit Score rubric", expanded=True):
-        st.markdown(RUBRIC_MD)
+    if _clicked in _locked:
+        st.toast(_locked[_clicked], icon="🔒")
+    else:
+        navigate(_clicked)
+
+
+@st.dialog("How scoring works", width="large")
+def scoring_dialog() -> None:
+    st.markdown(RUBRIC_MD)
+
+
+def scoring_link(key: str) -> None:
+    if st.button("ⓘ How scoring works", key=f"scoring-{key}", type="tertiary"):
+        scoring_dialog()
 
 
 def disclosure_html() -> str:
-    """What happens to uploads and results — shown under the input card, as in the design."""
-    parts = ["Uploaded files are processed on the server in a private temporary folder and are not stored."]
-    if settings.llm_available:
-        parts.append(f"The deck text is analyzed by Claude ({ui.code(settings.im_llm_model)}); every fact must "
-                     "quote its slide.")
-    if settings.notify_available:
-        parts.append("A copy of every generated shortlist (PDF + workbook) is emailed to "
-                     + ", ".join(ui.code(r) for r in settings.notify_recipients()) + ".")
-    parts.append("Nothing is ever sent to investors or founders.")
-    return " ".join(parts)
+    """What happens to uploads and results — shown under the input card."""
+    email = (f" Results are emailed to <b>{', '.join(settings.notify_recipients())}</b> only when you click "
+             "<b>Finalize &amp; email</b> on the last step." if settings.notify_available else "")
+    return ("🔒 <b>Private.</b> Uploaded files are processed in a temporary folder on the server and are not "
+            "stored. Nothing is ever sent to investors or founders." + email)
 
 
 # ------------------------------------------------------------------------------ 1. inputs
 
+def _deck_summary(upload) -> str:
+    """'name · 12 slides' for an uploaded deck (cheap: counts pages/slides only)."""
+    import io
+
+    name = upload.name
+    try:
+        if name.lower().endswith(".pdf"):
+            import pymupdf
+
+            with pymupdf.open(stream=upload.getvalue(), filetype="pdf") as doc:
+                return f"<b>{name}</b> · {doc.page_count} pages"
+        if name.lower().endswith(".pptx"):
+            from pptx import Presentation
+
+            return f"<b>{name}</b> · {len(Presentation(io.BytesIO(upload.getvalue())).slides)} slides"
+    except Exception:  # noqa: BLE001 - a summary must never block the upload
+        pass
+    return f"<b>{name}</b> · legacy PowerPoint — converted when analyzed"
+
+
+def _investor_list_picker() -> list:
+    """Checkbox list: recommended/current lists first with investor counts, older versions under 'Archived'."""
+    from html import escape
+
+    catalog = list_catalog(settings)
+    if not catalog:
+        st.error("No TEN Capital investor list is available yet. An administrator needs to add one "
+                 "(see DEPLOY.md → Investor lists).")
+        return []
+    has_recommended = any(x["status"] == "recommended" for x in catalog)
+    chosen = []
+
+    from datetime import datetime
+
+    def row(item, default: bool) -> None:
+        badge = "  :green-badge[Recommended]" if item["status"] == "recommended" else ""
+        if st.checkbox(f"**{item['label']}**{badge}", value=default, key=f"list::{item['path'].name}"):
+            chosen.append(item["path"])
+        when = item["updated"]
+        parts = [f"{when:%b} {when.day}, {when.year}"]
+        if item.get("contacts") is not None:
+            parts.append(f"{item['contacts']:,} contacts")
+        age = (datetime.now() - when).days
+        stale = (f' <span class="tc-stale">⚠ {age} days old — check for a newer version</span>'
+                 if age > STALE_LIST_DAYS and item["status"] != "archived" else "")
+        note = f"<br>{escape(item['note'])}" if item.get("note") else ""
+        st.html(f'<div class="tc-list-meta">{" · ".join(parts)}{stale}{note}</div>')
+
+    st.markdown("**Investor lists to search**")
+    st.caption("Lists are maintained by TEN Capital and can't be uploaded here.")
+    active = [x for x in catalog if x["status"] != "archived"]
+    archived = [x for x in catalog if x["status"] == "archived"]
+    for i, item in enumerate(active):
+        row(item, item["status"] == "recommended" or (not has_recommended and i == 0))
+    if archived:
+        with st.expander(f"Archived versions ({len(archived)}) — older copies of the master list"):
+            for item in archived:
+                row(item, False)
+    return chosen
+
+
 def step_inputs() -> None:
-    hero = ui.hero("Investor Match", "Pitch Deck", "Investor Shortlist",
-                   "Upload a pitch deck, choose TEN Capital's connected investor lists, and get a ranked investor shortlist, a "
-                   "one-page PDF and a full workbook — analyzed by Claude and scored with TEN Capital's rubric.",
-                   narrow=True)
+    hero = ui.hero("Step 1 of 5", "Pitch Deck", "Investor Shortlist",
+                   "Upload a pitch deck and choose a TEN Capital investor list to get a ranked investor shortlist, "
+                   "a one-page PDF and a full workbook.", narrow=True)
     with hero:
+        ui.install_drag_highlight()
+        st.markdown("**Pitch deck** :orange-badge[Required]")
         deck_file = st.file_uploader("Pitch deck", type=["pdf", "pptx", "ppt"], key="deck_upload",
-                                     help="PDF, PPTX or legacy PPT. Image-only slides are read with OCR.")
-        connected = connected_investor_lists(settings)
-        chosen: list = []
-        if connected:
-            chosen = st.multiselect(
-                "TEN Capital investor lists (connected through the Files API)", connected,
-                default=connected[:1], format_func=_list_label,
-                help="Only lists registered with the Anthropic Files API are used, newest first. Pick one or "
-                     "more; duplicates are merged by email. Unsubscribe sheets from every connected list always "
-                     "apply. Investor-list spreadsheets cannot be uploaded here.")
+                                     label_visibility="collapsed")
+        if deck_file is not None:
+            st.html(f'<div class="tc-file-meta">✓ {_deck_summary(deck_file)}</div>')
         else:
-            st.error("No investor list is connected through the Files API. Put the list in data/investor_lists/, "
-                     "run `python -m app.services.files_api`, and redeploy.")
-        intro_files = st.file_uploader("Investor Introductions lists (optional)", type=["xlsx", "xls", "csv"],
-                                       accept_multiple_files=True,
-                                       help="One or more trackers of introductions already made; used to exclude "
-                                            "investors already introduced. Not investor lists.")
-        aliases = st.text_input("Company name / aliases (optional)",
-                                placeholder="Other names the company has used, comma-separated",
-                                help="Used to recognize prior introductions recorded under another name.")
-        use_llm = False
-        if settings.llm_available:
-            use_llm = st.toggle(f"Analyze the deck with Claude ({settings.im_llm_model})", value=True,
-                                help="Sends the deck text to the Anthropic API. Claude's reading is cross-checked "
-                                     "against the rule-based extraction; every fact must quote its slide.")
-        else:
-            st.caption("Claude analysis is off (no ANTHROPIC_API_KEY); rule-based extraction is used.")
-        if claude_review.is_available(settings):
-            state.use_claude_review = st.toggle(
-                "Let Claude suggest categories for held contacts (Files API)", value=state.get("use_claude_review", True),
-                help="Claude opens the built-in list via its Files API copy and suggests a category, with a verified "
-                     "quote, for held contacts that could reach the shortlist. You accept suggestions before they "
-                     "are ranked.")
+            st.caption("Image-only slides are read too.")
+        chosen = _investor_list_picker()
+
+        with st.expander("Advanced options"):
+            intro_files = st.file_uploader("Introduction trackers (optional)",
+                                           type=["xlsx", "xls", "csv"], accept_multiple_files=True,
+                                           key="intro_upload")
+            st.caption("Spreadsheets of introductions already made for this company. Investors on them are "
+                       "excluded so nobody is introduced twice.")
+            aliases = st.text_input("Other company names (optional)",
+                                    placeholder="Former or alternative names, comma-separated")
+            st.caption("Helps recognize past introductions recorded under another name.")
+            use_llm = False
+            if settings.llm_available:
+                use_llm = st.toggle("Use AI to analyze the deck", value=state.get("use_llm", True), key="use_llm")
+                st.caption("On: AI reads every slide and double-checks each fact against the deck. "
+                           "Off = keyword matching only — faster, but less accurate."
+                           if use_llm else
+                           "Off: keyword matching only — faster, but may miss or misread deck facts.")
+            if claude_review.is_available(settings):
+                state.use_claude_review = st.toggle("Suggest categories for unclassified contacts",
+                                                    value=state.get("use_claude_review", True))
+                st.caption("On: AI suggests a category (with evidence) for promising investors whose type is "
+                           "missing; you approve each one. Adds about a minute. Off = they stay unranked."
+                           if state.use_claude_review else
+                           "Off: investors with a missing type stay in the review list without suggestions.")
+
         ready = deck_file is not None and bool(chosen)
         with st.container(key="tc-cta"):
             clicked = st.button("Analyze deck and investor lists →", type="primary", disabled=not ready,
                                 width="stretch")
+        if deck_file is None:
+            ui.html_note('<div class="tc-cta-note todo">Upload a pitch deck to continue.</div>')
+        elif not chosen:
+            ui.html_note('<div class="tc-cta-note todo">Choose at least one investor list to continue.</div>')
+        else:
+            minutes = "about 1–2 minutes" if use_llm else "under a minute"
+            ui.html_note(f'<div class="tc-cta-note">⏱ Analysis takes {minutes}. You review everything '
+                         "before anything is emailed.</div>")
         ui.disclosure(disclosure_html(), hero)
         if clicked:
             try:
-                with st.spinner("Reading the deck (OCR on image-only slides can take a minute)…"):
+                progress = st.status("Analyzing — this takes " + ("about 1–2 minutes…" if use_llm else
+                                                                 "under a minute…"), expanded=True)
+                with progress:
+                    st.write("Reading the deck (image-only slides are read with OCR)…")
                     deck = load_deck(_tmp_path(deck_file.name, deck_file.getvalue()), cfg, deck_file.name)
+                    st.write(f"✓ Read {deck.page_count} {deck.unit}s.")
                     client = None
                     if use_llm:
                         from app.extraction.llm import ClaudeClient
 
                         client = ClaudeClient(settings)
+                        st.write("AI is extracting and double-checking the deal facts…")
                     state.profile = extract(deck, llm_client=client)
                     state.deck = deck
-                with st.spinner("Loading investor lists…"):
+                    st.write("✓ Deal profile extracted. Loading investor lists…")
                     investors = []
                     for path in chosen:
                         investors += load_builtin_tables(path)
                     investors += builtin_suppression_tables(exclude=set(chosen), settings=settings)
+                    progress.update(label="Done — opening the column mapping", state="complete")
                 state.investors = investors
                 state.aliases = [a.strip() for a in aliases.split(",") if a.strip()]
                 deck_names = [n for n in (state.profile.effective("company_name"),
@@ -255,12 +370,28 @@ def _widget_key(t, kind: str, index: int, name: str) -> str:
     return f"{kind}-{name}-{table.sha256[:12]}-{table.filename}-{table.sheet or ''}-{index}"
 
 
-def _mapping_editor(t, specs, kind: str, index: int) -> None:
+def _sample_text(table, column: str) -> str:
+    values = [truncate(v, 28) for v in table.sample(column, 2)]
+    return "e.g. " + " · ".join(values) if values else "column is empty"
+
+
+def _score_field_warning(t) -> None:
+    """Amber note listing scoring components this sheet cannot feed (they earn 0 for every contact)."""
+    missing = unmapped_score_fields(t.mapping, cfg["weights"])
+    if not missing:
+        return
+    lines = []
+    for m in missing:
+        line = f"**{m['label']}** — {m['weight']:.0%} of the Fit Score will be 0 for everyone"
+        lines.append(line + (f" (except: {m['partial']})" if m["partial"] else ""))
+    st.warning("**Unmapped scoring columns.** If the list has these, map them below:\n\n"
+               + "\n".join(f"- {x}" for x in lines), icon="⚠️")
+
+
+def _mapping_editor(t, specs, kind: str, index: int, expanded: bool = False) -> None:
     table = t.table
     role_note = f" · {(ROLE_LABELS if kind == 'investor' else INTRO_ROLE_LABELS)[t.role]}"
-    with st.expander(f"{table.label} — {len(table.rows)} rows{role_note}",
-                     expanded=index == 0 or (kind == "investor" and t.role == ROLE_SUPPRESSION
-                                             and len(table.rows) < 2000)):
+    with st.expander(f"{table.label} — {len(table.rows):,} rows{role_note}", expanded=expanded):
         for warning in table.warnings:
             st.caption(f"ℹ {warning}")
         options = [UNMAPPED] + table.columns
@@ -290,17 +421,19 @@ def _mapping_editor(t, specs, kind: str, index: int) -> None:
                 t.mapping["email"] = None if choice == UNMAPPED else choice
                 count = len(suppression_emails(table, t.mapping))
                 (st.caption if count else st.warning)(
-                    f"{count} valid email address(es) on this list will be excluded from the results."
+                    f"{count:,} valid email address(es) on this list will be excluded from the results."
                     if count else "No valid email addresses found in that column.")
                 return
         cols = st.columns(3)
         for i, spec in enumerate(specs):
             current = t.mapping.get(spec.key) or UNMAPPED
-            choice = cols[i % 3].selectbox(spec.label, options, index=options.index(current),
-                                           key=_widget_key(t, kind, index, f"map-{spec.key}"),
-                                           help=("e.g. " + " · ".join(table.sample(current)))
-                                           if current != UNMAPPED else None)
+            col = cols[i % 3]
+            choice = col.selectbox(spec.label, options, index=options.index(current),
+                                   key=_widget_key(t, kind, index, f"map-{spec.key}"))
             t.mapping[spec.key] = None if choice == UNMAPPED else choice
+            col.caption(_sample_text(table, choice) if choice != UNMAPPED else "not used")
+        if kind == "investor":
+            _score_field_warning(t)
         if kind == "intro" and not t.mapping.get("company"):
             t.company_specific = st.checkbox(
                 "This file lists introductions for this company only (no company column)",
@@ -315,20 +448,72 @@ def step_mapping() -> None:
         st.info("Start with step 1.")
         return
     ui.hero("Step 2 of 5", "Source columns", "verified fields",
-            "Headers were mapped automatically. Correct anything that is wrong; unmapped optional fields are "
+            "Headers were mapped automatically. Check the investor contacts sheet; unmapped optional fields are "
             "treated as unknown, never as incompatible.", key="mapping")
-    st.markdown("**TEN Capital Investor List**")
-    for i, t in enumerate(state.investors):
-        _mapping_editor(t, INVESTOR_FIELDS, "investor", i)
-    st.markdown("**Investor Introductions lists**")
+    indexed = list(enumerate(state.investors))
+    contacts = sorted([(i, t) for i, t in indexed if t.role == ROLE_CONTACTS], key=lambda x: -len(x[1].table.rows))
+    main = [contacts[0]] if contacts else []
+    others = [(i, t) for i, t in indexed if not main or i != main[0][0]]
+    st.markdown("**Investor contacts sheet**")
+    for i, t in main:
+        _mapping_editor(t, INVESTOR_FIELDS, "investor", i, expanded=True)
+    suppression = [t for _, t in indexed if t.role == ROLE_SUPPRESSION]
+    if suppression:
+        names = ", ".join(sorted({f"{t.table.filename} › {t.table.sheet}" if t.table.sheet else t.table.filename
+                                  for t in suppression}))
+        st.info(f"Suppression lists are always applied from all connected files: {names}.", icon="🛡️")
+    if others:
+        skipped = sum(1 for _, t in others if t.role == ROLE_SKIP)
+        parts = [f"{skipped} skipped"] if skipped else []
+        parts += [f"{len(suppression)} unsubscribe"] if suppression else []
+        extra = len(others) - skipped - len(suppression)
+        parts += [f"{extra} more contact sheet(s)"] if extra else []
+        if st.toggle(f"Other sheets ({len(others)}: {', '.join(parts)})", key="show_other_sheets"):
+            for i, t in others:
+                _mapping_editor(t, INVESTOR_FIELDS, "investor", i)
+    st.markdown("**Investor introduction trackers**")
     if not state.intros:
-        st.warning("No introduction lists uploaded — prior-introduction screening will be incomplete.")
+        st.caption("None uploaded (Advanced options on step 1) — prior-introduction screening will be incomplete.")
     for i, t in enumerate(state.intros):
-        _mapping_editor(t, INTRO_FIELDS, "intro", i)
+        _mapping_editor(t, INTRO_FIELDS, "intro", i, expanded=i == 0)
     st.button("Review deal profile →", type="primary", on_click=go, args=(2,))
 
 
 # ------------------------------------------------------------------------------ 3. deal profile
+
+STATUS_BADGE = {FactStatus.STATED: "🟢 Stated", FactStatus.CLASSIFIED: "🔵 Classified",
+                FactStatus.CALCULATED: "🟣 Calculated", FactStatus.CONFLICT: "🟠 Conflicting",
+                FactStatus.NOT_STATED: "⚪ Not stated"}
+
+
+def _apply_override(profile, field: str, value: str, reason: str) -> bool:
+    try:
+        profile.overrides[field] = make_override(profile, field, value, reason)
+    except ValueError as exc:
+        st.error(f"{DEAL_FIELDS[field]}: {exc}")
+        return False
+    state.result, state.outputs = None, None
+    state._toast = (f"Saved: {DEAL_FIELDS[field]} → {profile.overrides[field].display}", "✅")
+    return True
+
+
+def _resolve_conflicts(profile) -> None:
+    deck = state.deck
+    text = deck.full_text if deck is not None else ""
+    for fact in profile.conflicts:
+        options = list(dict.fromkeys(c.display for c in fact.candidates))
+        cands = [next(c for c in fact.candidates if c.display == o) for o in options]
+        best = likely_candidate(cands, text, deck.filename if deck is not None else "")
+        with st.container(border=True):
+            st.markdown(f"**{fact.label}** — the deck gives different values. Most likely is pre-selected.")
+            labels = [f"{c.display}  ·  {c.source.locator}" for c in cands]
+            pick = st.radio(fact.label, range(len(cands)), index=best, format_func=labels.__getitem__,
+                            key=f"conflict-{fact.field}", label_visibility="collapsed")
+            if st.button("Use this value", key=f"conflict-use-{fact.field}", type="primary"):
+                if _apply_override(profile, fact.field, cands[pick].display,
+                                   "Chosen from conflicting deck values"):
+                    st.rerun()
+
 
 def step_profile() -> None:
     profile = state.profile
@@ -337,93 +522,201 @@ def step_profile() -> None:
         return
     deck = state.deck
     ui.hero("Step 3 of 5", "Deal profile", "review & correct",
-            f"Every fact extracted from {deck.filename}, with its slide reference. Corrections are recorded as "
-            "overrides beside the deck facts, never over them.", key="profile")
+            f"Every fact extracted from {deck.filename}, with its slide reference. Type a correction in the "
+            "Correction column — corrections are kept beside the deck facts, never over them.", key="profile")
     for w in profile.warnings:
         st.warning(w)
+    if profile.conflicts:
+        st.markdown("**Resolve conflicting figures** — unresolved fields are not used for matching.")
+        _resolve_conflicts(profile)
+
+    names = list(DEAL_FIELDS)
     rows = []
-    for name, label in DEAL_FIELDS.items():
+    for name in names:
         f = profile.facts[name]
         o = profile.overrides.get(name)
-        rows.append({"Field": label, "Deck value": f.display, "Status": f.status.value,
-                     "Source": refs_label(f.sources, 3), "Override": o.display if o else "",
+        rows.append({"Field": DEAL_FIELDS[name], "Status": STATUS_BADGE.get(f.status, f.status.value),
+                     "Deck value": f.display, "Correction": o.display if o else "",
+                     "Source": ", ".join(dict.fromkeys(x.locator for x in f.sources)) or "—",
                      "Notes": " ".join(f.notes)})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-    if profile.conflicts:
-        st.error("Conflicting figures: " + "; ".join(f.label for f in profile.conflicts)
-                 + ". Resolve with an override below, or leave unresolved (the field is then not used).")
+    version = state.get("profile_editor_version", 0)
+    edited = st.data_editor(
+        pd.DataFrame(rows), hide_index=True, width="stretch", height=35 * (len(rows) + 1) + 3,
+        disabled=["Field", "Status", "Deck value", "Source", "Notes"], key=f"profile-editor-{version}",
+        column_config={
+            "Field": st.column_config.TextColumn(width="medium", pinned=True),
+            "Status": st.column_config.TextColumn(width="medium"),
+            "Deck value": st.column_config.TextColumn(width="medium"),
+            "Correction": st.column_config.TextColumn(
+                width="medium", help="Type a value and press Enter. Clear it to remove the correction. "
+                                     "Sector/stage must match the taxonomy (or use the picker below)."),
+            "Source": st.column_config.TextColumn(width="medium"),
+            "Notes": st.column_config.TextColumn(width="large"),
+        })
+    changed = False
+    for name, new in zip(names, edited["Correction"].fillna(""), strict=True):
+        old = profile.overrides[name].display if name in profile.overrides else ""
+        new = str(new).strip()
+        if new == old:
+            continue
+        if not new:
+            profile.overrides.pop(name, None)
+            state.result, state.outputs = None, None
+            state._toast = (f"Removed correction for {DEAL_FIELDS[name]}", "↩️")
+            changed = True
+        elif _apply_override(profile, name, new, "Edited in the profile table"):
+            changed = True
+    if changed:
+        state.profile_editor_version = version + 1
+        st.rerun()
 
-    st.markdown("**Correct a field** — overrides are recorded separately from the deck facts.")
-    labels = {label: name for name, label in DEAL_FIELDS.items()}
-    c1, c2, c3 = st.columns([2, 3, 3])
-    field = labels[c1.selectbox("Field", list(labels))]
-    fact = profile.facts[field]
-    if field == "sector":
-        value = c2.selectbox("Value", tx.SECTOR_NAMES)
-    elif field == "subsector":
-        sector = profile.effective("sector")
-        options = tx.SUBSECTORS_BY_SECTOR.get(sector, list(tx.SECTOR_OF_SUBSECTOR))
-        value = " / ".join(c2.multiselect("Value", options))
-    elif field == "stage":
-        value = c2.selectbox("Value", tx.STAGES)
-    elif fact.candidates and fact.status == FactStatus.CONFLICT:
-        value = c2.selectbox("Value (deck candidates)", list(dict.fromkeys(c.display for c in fact.candidates)))
-    else:
-        value = c2.text_input("Value", placeholder="e.g. $2.5M · Austin, TX · December 15, 2026")
-    reason = c3.text_input("Reason", placeholder="e.g. confirmed with founder on 9/30")
-    b1, b2 = st.columns([1, 5])
-    if b1.button("Apply override"):
-        try:
-            profile.overrides[field] = make_override(profile, field, value, reason)
-            state.result = None
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
-    if profile.overrides:
-        remove = b2.selectbox("Remove override", ["—"] + [DEAL_FIELDS[n] for n in profile.overrides])
-        if remove != "—" and b2.button("Remove"):
-            profile.overrides.pop(labels[remove])
-            state.result = None
+    with st.expander("Pick sector, subsector or stage from the list"):
+        c1, c2, c3 = st.columns([2, 3, 1], vertical_alignment="bottom")
+        field = {"Sector": "sector", "Subsector": "subsector", "Stage": "stage"}[
+            c1.selectbox("Field", ["Sector", "Subsector", "Stage"])]
+        if field == "sector":
+            value = c2.selectbox("Value", tx.SECTOR_NAMES)
+        elif field == "subsector":
+            sector = profile.effective("sector")
+            value = " / ".join(c2.multiselect("Value", tx.SUBSECTORS_BY_SECTOR.get(sector, list(tx.SECTOR_OF_SUBSECTOR))))
+        else:
+            value = c2.selectbox("Value", tx.STAGES)
+        if c3.button("Save", width="stretch") and _apply_override(profile, field, value, "Picked from taxonomy"):
+            state.profile_editor_version = version + 1
             st.rerun()
 
     ctx = build_context(profile, state.aliases)
     st.markdown("**Summary used in the PDF**")
-    st.markdown("\n".join(f"- {b}" for b in profile_bullets(profile, ctx)))
-    st.caption(f"Remaining allocation for check-size fit: "
+    st.markdown(_md("\n".join(f"- {b}" for b in profile_bullets(profile, ctx, with_refs=False))))
+    st.caption(_md(f"Remaining allocation for check-size fit: "
                f"{ctx.remaining.display() + ' (' + ctx.remaining_basis + ')' if ctx.remaining else 'not established'}"
-               f" · Aliases for intro matching: {', '.join(ctx.aliases) or 'none'}")
+               f" · Aliases for intro matching: {', '.join(ctx.aliases) or 'none'}"))
     if st.button("Run matching →", type="primary"):
         _run()
 
 
-def _run() -> None:
-    # Sheets that cannot be used (investor lists or introductions) are skipped by the pipeline and noted in
-    # the screening limitations; they never block a run.
+def _run(goto: int | None = 3) -> None:
+    """Screen, score, let Claude review held contacts and render the files. Never emails: results are only
+    emailed from the Export step ("Finalize & email"), once per generated state."""
     try:
         with st.spinner("Screening and scoring…"):
             state.result = run_matching(state.profile, state.investors, state.intros, cfg,
                                         user_aliases=state.aliases, intro_decisions=state.decisions,
                                         category_overrides=state.category_overrides)
         if claude_review.is_available(settings) and state.get("use_claude_review", True):
-            with st.spinner("Claude is reviewing held contacts in the investor list (Files API)…"):
+            with st.spinner("Claude is reviewing held contacts in the investor list…"):
                 claude_review.review_held_contacts(state.result, state.investors, settings)
         with st.spinner("Generating the PDF and workbook…"):
             state.outputs = render_outputs(state.result)
-        if settings.notify_available:
-            with st.spinner(f"Emailing results to {', '.join(settings.notify_recipients())}…"):
-                deliver_results(state.result, state.outputs, settings)
-        navigate(3)
+        if goto is not None:
+            navigate(goto)
+        st.rerun()
     except InvestorMatchError as exc:
         st.error(str(exc))
 
 
 # ------------------------------------------------------------------------------ 4. results
 
-def _email_status(result) -> None:
-    if not result.notifications:
+SHORT_CATEGORY = {"Angels": "Angels", "Angel Groups & Syndicates": "Groups",
+                  "HNI & Family Offices": "Family offices", "VCs (Seed & Early-Stage)": "VCs"}
+
+
+def _suggestions(result) -> None:
+    sugs = result.category_suggestions
+    if not sugs:
         return
-    last = result.notifications[-1]
-    (st.success if last.sent else st.warning)("✉ " + last.status_text + ".")
+    verified = [s for s in sugs if s.rule_check != "differs"]
+    st.subheader(f"Claude found {len(sugs)} likely match{'es' if len(sugs) != 1 else ''} held for review")
+    st.caption("These contacts were held only because their investor type was missing or unclear. Claude read each "
+               "row in the investor list and quoted the evidence; every quote was checked against the list. "
+               "“Verified” = the quote agrees with (or is not contradicted by) the app's own type rules.")
+    table = pd.DataFrame([{
+        "Accept": s.rule_check != "differs",
+        "Projected fit": s.fit_if_categorized,
+        "Would rank": f"#{projected_rank(s.fit_if_categorized, result.ranked, s.category)} in "
+                      f"{SHORT_CATEGORY.get(s.category.value, s.category.value)}",
+        "Name": s.name, "Organization": s.organization, "Suggested category": s.category.value,
+        "Evidence": f"{s.column}: “{s.evidence}”",
+        "Check": "✓ verified" if s.rule_check != "differs" else "⚠ differs from type rules",
+        "Email": s.email,
+    } for s in sorted(sugs, key=lambda s: -s.fit_if_categorized)])
+    edited = st.data_editor(table, hide_index=True, width="stretch", key="suggestions-editor",
+                            disabled=[c for c in table.columns if c != "Accept"],
+                            column_config={"Projected fit": st.column_config.NumberColumn(format="%.1f"),
+                                           "Accept": st.column_config.CheckboxColumn(width="small")})
+    chosen = edited[edited["Accept"]]
+    c1, c2, _ = st.columns([2, 2, 3])
+    if c1.button(f"Accept all {len(verified)} verified and re-run", type="primary", disabled=not verified):
+        state.category_overrides.update({s.email: s.category.value for s in verified})
+        _run(goto=None)
+    if c2.button(f"Accept selected ({len(chosen)}) and re-run", disabled=chosen.empty):
+        state.category_overrides.update(dict(zip(chosen["Email"], chosen["Suggested category"], strict=True)))
+        _run(goto=None)
+
+
+def _grey_research(value):
+    return "color: #7d8796; font-style: italic;" if value == NEEDS_RESEARCH else ""
+
+
+def _ranked_table(result, rows: list, key: str):
+    columns = ["Category", "Fit Score", "Why a fit", "Name", "Note", "Organization", "Email", "Phone",
+               "Investor Type", "Location"]
+    df = pd.DataFrame(rows)[columns] if rows else pd.DataFrame(columns=columns)
+    if key != "all":
+        df = df.drop(columns=["Category"])
+    styled = df.style.map(_grey_research).format({"Fit Score": "{:.1f}"})
+    event = st.dataframe(styled, hide_index=True, width="stretch", key=f"ranked-{key}", on_select="rerun",
+                         selection_mode="single-row", height=min(38 * (len(df) + 1) + 4, 560),
+                         column_config={"Why a fit": st.column_config.TextColumn(width="large"),
+                                        "Note": st.column_config.TextColumn(width="small")})
+    picked = event.selection.rows if event and event.selection else []
+    return rows[picked[0]] if picked else None
+
+
+def _contact_detail(row) -> None:
+    s = row["_scored"]
+    c = s.contact
+    with st.container(border=True):
+        st.markdown(f"**{c.full_name or c.organization or c.email_display}** · {c.organization or '—'} · "
+                    f"Fit {s.fit_score:.1f} · {s.category.value}")
+        st.caption(s.why)
+        linkedin = c.get("linkedin")
+        a, b = st.columns(2)
+        a.markdown(f"**LinkedIn:** [{truncate(linkedin, 60)}]({linkedin if linkedin.startswith('http') else 'https://' + linkedin})"
+                   if linkedin else "**LinkedIn:** :gray[needs research]")
+        b.markdown(f"**TEN relationship:** {s.ten_relationship}")
+        st.dataframe(pd.DataFrame([{"Component": x.label, "Weight": f"{x.weight:.0%}", "Rating": x.rating,
+                                    "Evidence": x.evidence} for x in s.components]),
+                     hide_index=True, width="stretch")
+
+
+def _held_section(result, counts) -> None:
+    held = counts["review"]
+    total = result.stats.get("unique_contacts") or 0
+    share = f" ({held / total:.0%} of {total:,} contacts)" if total else ""
+    st.subheader(f"Held for review: {held:,}{share}")
+    st.caption("Held contacts are not ranked until their category (or a possible prior introduction) is "
+               "resolved. Projected fit = the score they would get once categorized.")
+    breakdown = held_breakdown(result)
+    if breakdown:
+        cols = st.columns(min(len(breakdown), 4))
+        for col, (reason, n) in zip(cols, breakdown[:4], strict=False):
+            col.metric(reason, f"{n:,}")
+        if len(breakdown) > 4:
+            st.caption(" · ".join(f"{r}: {n:,}" for r, n in breakdown[4:]))
+    top = held_rows(result, limit=20)
+    if top:
+        threshold = result.config["thresholds"]["min_fit_score"]
+        clearing = sum(1 for s in held_contacts(result) if s.fit_score >= threshold)
+        st.markdown(f"**Top 20 held by projected score** — {clearing:,} held contact(s) would clear the "
+                    f"{threshold:.1f} threshold.")
+        st.dataframe(pd.DataFrame(top), hide_index=True, width="stretch",
+                     column_config={"Projected fit": st.column_config.NumberColumn(format="%.1f", width="small"),
+                                    "Why a fit": st.column_config.TextColumn(width="large")})
+        full = pd.DataFrame(held_rows(result))
+        st.download_button(f"Download held list ({len(full):,} rows, CSV)", full.to_csv(index=False).encode("utf-8-sig"),
+                           f"{output_names(result.context.company_name, result.report_date)[1][:-5]}_held.csv",
+                           "text/csv", key="held-download")
 
 
 def step_results() -> None:
@@ -433,38 +726,49 @@ def step_results() -> None:
         return
     counts = summary_counts(result)
     ui.hero("Step 4 of 5", result.context.company_name or "Results", "ranked investors",
-            f"{counts['qualified_total']} qualified contacts across four categories; "
-            f"{counts['already_introduced']} already introduced and {counts['review']} held for review.",
+            f"{counts['qualified_total']:,} qualified contacts across four categories; "
+            f"{counts['already_introduced']:,} already introduced and {counts['review']:,} held for review.",
             key="results")
-    _email_status(result)
-    short = {"Angels": "Angels", "Angel Groups & Syndicates": "Angel groups", "HNI & Family Offices": "HNI & FOs",
-             "VCs (Seed & Early-Stage)": "Seed / early VCs"}
-    tiles = [(short.get(k, k), n, k) for k, n in counts["qualified"].items()]
-    tiles += [("Already introduced", counts["already_introduced"], "Excluded — do not re-intro"),
-              ("Held for review", counts["review"], "Ambiguous type or possible prior introduction")]
-    for col, (label, n, full) in zip(st.columns(6), tiles, strict=True):
-        col.metric(label, n, help=full)
-    st.subheader("Ranked investors")
-    df = pd.DataFrame(ranked_rows(result), columns=RANKED_COLUMNS)
-    category = st.multiselect("Category", list(counts["qualified"]), default=list(counts["qualified"]))
-    st.dataframe(df[df["Category"].isin(category)], hide_index=True, width="stretch",
-                 column_config={"Fit Score": st.column_config.NumberColumn(format="%.1f")})
+    actions, notes = action_warnings(result)
+    for a in actions:
+        st.warning(_md(a), icon="⚠️")
+    if notes:
+        with st.expander(f"Other notes ({len(notes)})"):
+            st.markdown(_md("\n".join(f"- {x}" for x in notes)))
+    scoring_link("results")
 
-    if result.category_suggestions:
-        st.subheader("Claude category suggestions — accept to rank")
-        st.caption("Claude read these contacts' rows in the investor list (Files API) and quoted the evidence; each "
-                   "quote was verified against the list. Held contacts are only ranked after you accept.")
-        table = pd.DataFrame([{"Accept": False, "Email": s.email, "Name": s.name, "Organization": s.organization,
-                               "Suggested category": s.category.value, "Evidence": f"{s.column}: “{s.evidence}”",
-                               "Rule check": s.rule_check, "Fit if categorized": s.fit_if_categorized}
-                              for s in result.category_suggestions])
-        edited = st.data_editor(table, hide_index=True, width="stretch",
-                                disabled=[c for c in table.columns if c != "Accept"],
-                                column_config={"Fit if categorized": st.column_config.NumberColumn(format="%.1f")})
-        chosen = edited[edited["Accept"]]
-        if st.button(f"Accept {len(chosen)} suggestion(s) and re-run", disabled=chosen.empty):
-            state.category_overrides.update(dict(zip(chosen["Email"], chosen["Suggested category"], strict=True)))
-            _run()
+    tiles = [(SHORT_CATEGORY.get(k, k), n, k) for k, n in counts["qualified"].items()]
+    tiles += [("Introduced", counts["already_introduced"], "Already introduced to this company — excluded"),
+              ("On hold", counts["review"], "Held for review: ambiguous type or possible prior introduction")]
+    for col, (label, n, full) in zip(st.columns(6), tiles, strict=True):
+        col.metric(label, f"{n:,}", help=full)
+
+    _suggestions(result)
+
+    st.subheader("Ranked investors")
+    st.caption("Sorted by Fit Score. Select a row for LinkedIn, TEN relationship and the scoring evidence.")
+    rows = []
+    for s, values in zip(result.ranked, ranked_rows(result), strict=True):
+        r = dict(zip(RANKED_COLUMNS, values, strict=True))
+        name = " ".join(p for p in (s.contact.first_name, s.contact.last_name) if p)
+        r.update({"Name": name or NEEDS_RESEARCH, "Note": contact_note(s.contact), "_scored": s,
+                  "Why a fit": " · ".join(compact_why(s.components))})
+        rows.append(r)
+    by_score = sorted(rows, key=lambda r: (-r["Fit Score"], r["Note"] != "", r["Email"]))
+    labels = [f"All ({len(rows):,})"] + [f"{SHORT_CATEGORY.get(k, k)} ({n:,})" for k, n in counts["qualified"].items()]
+    picked = None
+    for tab, (i, label) in zip(st.tabs(labels), enumerate(labels), strict=True):
+        with tab:
+            subset = by_score if i == 0 else [r for r in by_score if r["Category"] == list(counts["qualified"])[i - 1]]
+            if not subset:
+                st.caption("No qualified contacts in this category.")
+                continue
+            picked = _ranked_table(result, subset, "all" if i == 0 else f"cat{i}") or picked
+    if picked is not None:
+        _contact_detail(picked)
+
+    _held_section(result, counts)
+
     review = [e for e in result.log if e.code == "POSSIBLE_PRIOR_INTRO"]
     if review or state.decisions:
         st.subheader("Possible prior introductions — decide before outreach")
@@ -477,17 +781,49 @@ def step_results() -> None:
                     options=[DECISION_REVIEW, DECISION_NEW, DECISION_INTRODUCED])})
             if st.button("Apply decisions and re-run"):
                 state.decisions.update({r.Email: r.Decision for r in edited.itertuples() if r.Decision != DECISION_REVIEW})
-                _run()
-    st.subheader("Exclusions, review items and flags")
-    log = pd.DataFrame(exclusion_rows(result), columns=EXCLUSION_COLUMNS)
-    status = st.multiselect("Status", [s.value for s in LogStatus], default=[LogStatus.REVIEW.value, LogStatus.EXCLUDED.value])
-    st.dataframe(log[log["Status"].isin(status)], hide_index=True, width="stretch")
-    st.subheader("Screening limitations")
-    st.markdown("\n".join(f"- {x}" for x in result.limitations))
+                _run(goto=None)
+    with st.expander("Full screening log (exclusions, review items, flags)"):
+        log = pd.DataFrame(exclusion_rows(result), columns=EXCLUSION_COLUMNS)
+        status = st.multiselect("Status", [s.value for s in LogStatus],
+                                default=[LogStatus.REVIEW.value, LogStatus.EXCLUDED.value])
+        st.dataframe(log[log["Status"].isin(status)], hide_index=True, width="stretch")
     st.button("Export →", type="primary", on_click=go, args=(4,))
 
 
 # ------------------------------------------------------------------------------ 5. export
+
+def _size(n: int) -> str:
+    return f"{n / 1024:,.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:,.1f} MB"
+
+
+def _finalize(result) -> None:
+    """The only place results are emailed. Sends once per generated state (deliver_results deduplicates)."""
+    if not settings.notify_available:
+        st.caption("Email delivery is not configured on this server — download the files below.")
+        return
+    to = ", ".join(settings.notify_recipients())
+    key = generation_key(result)
+    sent_now = next((n for n in result.notifications + state.get("sent_emails", [])
+                     if n.sent and n.generation == key), None)     # also survives an unchanged re-run
+    sent_before = [n for n in state.get("sent_emails", []) if n.generation != key]
+    with st.container(border=True):
+        if sent_now:
+            st.success(f"✉ Finalized — results emailed to {to} ({sent_now.at[:16].replace('T', ' ')} UTC). "
+                       "Re-running or changing the results will not send another email unless you finalize again.")
+            return
+        st.markdown(f"**Finalize & email** — when the shortlist looks right, send the PDF and workbook to **{to}**.")
+        if sent_before:
+            st.caption("An earlier version of these results was already emailed. Finalizing sends the updated version.")
+        failed = [n for n in result.notifications if n.generation == key and not n.sent]
+        if failed:
+            st.warning("✉ " + failed[-1].status_text + ".")
+        if st.button(f"Finalize & email to {to}", type="primary", key="finalize"):
+            with st.spinner(f"Emailing results to {to}…"):
+                outcome = deliver_results(result, state.outputs, settings)
+            if outcome.sent:
+                state.setdefault("sent_emails", []).append(outcome)
+            st.rerun()
+
 
 def step_export() -> None:
     result = state.result
@@ -499,18 +835,18 @@ def step_export() -> None:
         with st.spinner("Rendering PDF and workbook…"):
             state.outputs = render_outputs(result)
     pdf, xlsx = state.outputs[pdf_name], state.outputs[xlsx_name]
+    counts = summary_counts(result)
     ui.hero("Step 5 of 5", "Results", "PDF · Excel · Email",
-            "Download the one-page summary and the full workbook. Contact details are kept in the workbook only.",
-            key="export")
-    _email_status(result)
-    if settings.notify_available and not any(n.sent for n in result.notifications):
-        if st.button(f"Email results to {', '.join(settings.notify_recipients())}"):
-            deliver_results(result, state.outputs, settings)
-            st.rerun()
+            "Download the one-page summary and the full workbook, then finalize to email them. "
+            "Contact details are kept in the workbook only.", key="export")
+    _finalize(result)
     c1, c2 = st.columns(2)
-    c1.download_button("Download one-page PDF", pdf, pdf_name, "application/pdf", type="primary")
-    c2.download_button("Download Excel workbook", xlsx, xlsx_name,
-                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+    c1.download_button("⬇ Download one-page PDF", pdf, pdf_name, "application/pdf", type="primary", width="stretch")
+    c1.caption(f"PDF · 1 page · {_size(len(pdf))}")
+    c2.download_button("⬇ Download Excel workbook", xlsx, xlsx_name,
+                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="secondary",
+                       width="stretch")
+    c2.caption(f"Workbook · {counts['qualified_total']:,} ranked + {counts['review']:,} held · {_size(len(xlsx))}")
     st.subheader("Google Sheets")
     if not settings.google_sheets_configured:
         from app.reports.google_sheets import ENABLE_INSTRUCTIONS
@@ -530,5 +866,9 @@ def step_export() -> None:
         st.image(doc[0].get_pixmap(dpi=90).tobytes("png"), caption="PDF preview")
 
 
+if state.get("_scrolled_step") != state.step:      # opened a new step: start at the top of the page
+    state._scrolled_step = state.step
+    state._scroll_nonce = state.get("_scroll_nonce", 0) + 1
+    ui.scroll_to_top(f"step-{state.step}-{state._scroll_nonce}")
 [step_inputs, step_mapping, step_profile, step_results, step_export][state.step]()
-ui.footer()
+ui.footer(f"AI: Claude ({settings.im_llm_model})" if settings.llm_available else None)

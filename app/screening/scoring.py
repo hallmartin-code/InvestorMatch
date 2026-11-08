@@ -323,6 +323,25 @@ def why_line(components: list[ComponentScore], limit: int = 170) -> str:
     return truncate("; ".join(parts), limit) or "Insufficient documented evidence"
 
 
+def compact_why(components: list[ComponentScore]) -> list[str]:
+    """Short rationale phrases (strongest evidence first) for space-limited outputs such as the PDF.
+    Callers drop whole phrases from the end instead of cutting words."""
+    phrases = []
+    for c in sorted(components, key=lambda c: -c.weighted):
+        if c.rating <= 0:
+            continue
+        text = c.evidence.split(" (")[0].split(";")[0].strip()
+        if c.key == "check_size":
+            text = text.split(" fit ")[0].replace(" are small vs", " (small vs").split(" vs ")[0]
+            text = text if "(" not in text or text.endswith(")") else text + ")"
+        elif c.key == "ten_relationship":
+            text = "TEN network"
+        if c.inferred:
+            text += " (inferred)"
+        phrases.append(text)
+    return phrases or ["Insufficient documented evidence"]
+
+
 def score_contact(contact: Contact, attrs: InvestorAttributes, ctx: DealContext, category: Category | None,
                   cfg: dict[str, Any]) -> ScoredContact:
     weights = cfg["weights"]

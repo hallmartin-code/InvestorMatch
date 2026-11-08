@@ -318,9 +318,9 @@ def run_matching(profile: DealProfile, investor_tables: list[TableInput], intro_
             limitations.append(f"Sheet {t.table.label} was not used ({t.role_reason or 'skipped'}).")
     if suppression_tables:
         listed = sum(1 for e in log if e.code == "SUPPRESSED" and "unsubscribe list" in e.detail)
-        limitations.insert(0, f"{len(suppression_list)} address(es) on unsubscribe sheet(s) "
+        limitations.insert(0, f"{len(suppression_list):,} address(es) on unsubscribe sheet(s) "
                               f"({', '.join(t.table.sheet or t.table.filename for t in suppression_tables)}); "
-                              f"{listed} matching contact(s) excluded.")
+                              f"{listed:,} matching contact(s) excluded.")
     stats = {
         "investor_rows": len(records), "unique_contacts": len(contacts),
         "suppressed": sum(1 for e in log if e.code == "SUPPRESSED"),
@@ -396,10 +396,10 @@ def _limitations(profile, ctx, intro_tables, screen, ranked, contacts, log) -> l
         out.append(f"{unstated} introduction row(s) name no company; matches were held for review.")
     review = sum(1 for e in log if e.status == LogStatus.REVIEW)
     if review:
-        out.append(f"{review} contact(s) held for review (ambiguous type or possible prior intro).")
+        out.append(f"{review:,} contact(s) held for review (ambiguous type or possible prior intro).")
     low = sum(1 for s in ranked if s.evidence_completeness < 0.6)
     if low:
-        out.append(f"{low} ranked contact(s) have evidence completeness below 60%.")
+        out.append(f"{low:,} ranked contact(s) have evidence completeness below 60%.")
     out.append("Email syntax was checked; deliverability was not verified.")
     for w in profile.warnings:
         if "OCR" in w:

@@ -87,7 +87,8 @@ def generation_key(result: RunResult) -> str:
     parts = [result.deal.deck_file, result.report_date.isoformat()]
     parts += [f"{f['File']}:{f['Sheet']}:{f['SHA-256']}:{f['Company-specific']}" for f in result.input_files]
     parts += [f"{k}={o.display}@{o.entered_at}" for k, o in sorted(result.deal.overrides.items())]
-    parts += [f"{e.code}:{e.email}" for e in result.log if e.code == "INTRO_REVIEW_CLEARED"]
+    parts += [f"{e.code}:{e.email}:{e.reason}" for e in result.log
+              if e.code in ("INTRO_REVIEW_CLEARED", "CATEGORY_ACCEPTED")]
     parts += [f"{r['Email']}:{r['Match Basis']}" for r in result.already_introduced]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:24]
 

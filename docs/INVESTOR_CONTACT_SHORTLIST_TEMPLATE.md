@@ -92,7 +92,7 @@ Extracted from every slide/page (text, tables, charts, notes, footnotes, appendi
 | `terms` | `Stage: {stage}; instrument: {instrument}` | stage, instrument |
 | `raise` | `Raise: {raise_amount}; committed: {amount_committed}` | raise_amount, amount_committed |
 | `allocation` | `Remaining: {amount_remaining}; soft interest: {soft_interest}` | amount_remaining, soft_interest |
-| `geography` | `Company: {company_geography}; target investors: {target_investor_geography}` | company_geography, target_investor_geography |
+| `geography` | `Location: {company_geography}; target investors: {target_investor_geography}` | company_geography, target_investor_geography |
 | `timing` | `Target close: {target_close_date}` | target_close_date |
 
 Source markers: `[s{n}, p{n}]` (max 3; overrides cite “user override”). A [[...]] segment is dropped when its field is not stated or repeats the company name.
@@ -117,7 +117,7 @@ Grouped by category; group header `{category} — {count} qualified`; up to 3 ro
 | Column | Label | Source | Width | Limit | Placeholder | If empty |
 |---|---|---|---|---|---|---|
 | `rank` | # | rank within category | 14.0 |  | # |  |
-| `name` | Name | contact first + last name | 92.0 |  | [Contact name] | (generic inbox — no named contact) |
+| `name` | Name | contact first + last name | 92.0 |  | [Contact name] | General inbox |
 | `organization` | Organization | contact organization | 112.0 | 40 chars | [Organization] | — |
 | `score` | Score | Fit Score (1–10) | 34.0 |  | [0.0] |  |
 | `why` | Why a fit | documented evidence per score component; inferences labelled '(inferred)' | remaining | 2 lines | [Evidence-based fit rationale] |  |

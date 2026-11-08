@@ -153,8 +153,9 @@ CSS = f"""
 [data-baseweb="tab-highlight"] {{ background: linear-gradient(90deg,var(--coral),var(--amber)); }}
 
 /* disclosure and footer */
-.tc-disclosure {{ margin-top:18px; padding-top:14px; border-top:1px solid var(--navy-700); font-size:12px;
-  line-height:1.6; color:var(--ink-500); }}
+.tc-disclosure {{ margin-top:18px; padding-top:14px; border-top:1px solid var(--navy-700); font-size:13px;
+  line-height:1.6; color:var(--ink-300); }}
+.tc-disclosure b {{ color: var(--ink-100); font-weight:600; }}
 .tc-disclosure code {{ font-family:'JetBrains Mono',monospace; background:var(--navy-950);
   border:1px solid var(--navy-700); color:var(--ink-300); padding:2px 6px; border-radius:5px; font-size:11.5px; }}
 .tc-footer {{ text-align:center; margin: 34px 0 6px; font-family:'JetBrains Mono',monospace; font-size:11px;
@@ -174,12 +175,12 @@ CSS = f"""
 [data-testid="stFileUploaderDropzone"] {{ flex-direction: column; justify-content:center; align-items:center;
   text-align:center;
   gap: 12px; padding: 28px 22px !important; cursor: pointer; }}
-[data-testid="stFileUploaderDropzone"]::before {{ content:""; width:38px; height:38px; border-radius:10px;
+[data-testid="stFileUploaderDropzone"]::before {{ display:none !important; content:""; width:38px; height:38px; border-radius:10px;
   flex-shrink:0; margin: 0 auto; align-self:center;
   border:1px solid var(--navy-700);
   background: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F3F6FA' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3v4a1 1 0 0 0 1 1h4'/%3E%3Cpath d='M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2Z'/%3E%3C/svg%3E") center/18px no-repeat,
     linear-gradient(135deg, rgba(238,90,78,.16), rgba(243,162,42,.16)); }}
-[data-testid="stFileUploaderDropzoneInstructions"] {{ font-family:'JetBrains Mono',monospace; font-size:11.5px;
+[data-testid="stFileUploaderDropzoneInstructions"] {{ font-family:inherit; font-size:12.5px;
   color: var(--ink-500); letter-spacing:.01em; }}
 [data-testid="stFileUploaderDropzoneInstructions"] svg {{ display:none; }}
 .st-key-deck_upload [data-testid="stFileUploaderDropzone"] {{ padding: 40px 24px !important; }}
@@ -199,9 +200,60 @@ CSS = f"""
 [class*="st-key-tc-nav-"] button {{ width:100%; justify-content:flex-start; border-radius:10px;
   border:1px solid var(--navy-700) !important; background:rgba(255,255,255,0.015) !important;
   color:var(--ink-500) !important; font-size:12.5px; font-weight:500; padding: 8px 12px; min-height: 0; }}
-[class*="st-key-tc-nav-"] button p {{ font-size:12.5px; white-space:nowrap; }}
+[class*="st-key-tc-nav-"] button p {{ font-size:12.5px; white-space:normal; line-height:1.25; }}
 [class*="st-key-tc-nav-"] button:hover:not(:disabled) {{ border-color: var(--teal) !important; color: var(--ink-100) !important; }}
 [class*="st-key-tc-nav-"] button:disabled {{ opacity:.7; }}
+
+/* ---- usability round: stepper states, disabled CTA, drop zones, tooltips, no sidebar ---- */
+.st-key-tc-nav [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap; }}
+.st-key-tc-nav [data-testid="stColumn"] {{ min-width: 110px; }}
+.tc-locked button {{ opacity:.45; border-style:dashed !important; cursor:not-allowed !important; }}
+
+/* main button: grey and inert until the required inputs are in */
+[data-testid="stBaseButton-primary"]:disabled {{ background: var(--navy-700) !important; color: var(--ink-500) !important;
+  box-shadow: none !important; filter: none !important; transform: none !important; cursor: not-allowed !important; }}
+[data-testid="stBaseButton-primary"]:disabled p {{ color: var(--ink-500) !important; }}
+.tc-cta-note {{ text-align:center; font-size:13px; color: var(--ink-300); margin: 2px 0 6px; }}
+.tc-cta-note.todo {{ color: var(--amber); }}
+.tc-cta-note b {{ color: var(--ink-100); font-weight:600; }}
+
+/* drop zones: say what they do, highlight while a file is dragged over them */
+.st-key-deck_upload [data-testid="stFileUploaderDropzoneInstructions"]::before,
+.st-key-intro_upload [data-testid="stFileUploaderDropzoneInstructions"]::before {{
+  display:block; color: var(--ink-100); font-size:14px; font-weight:600; margin-bottom:4px; }}
+.st-key-deck_upload [data-testid="stFileUploaderDropzoneInstructions"]::before {{
+  content: "Drag and drop or browse"; }}
+.st-key-intro_upload [data-testid="stFileUploaderDropzoneInstructions"]::before {{
+  content: "Drag and drop or browse"; }}
+.st-key-intro_upload [data-testid="stFileUploaderDropzone"] {{ padding: 12px 16px !important; flex-direction: row; gap: 14px; }}
+[data-testid="stFileUploaderDropzoneInstructions"] {{ display:flex; flex-direction:column; align-items:center; }}
+[data-testid="stFileUploaderDropzone"].tc-drag {{ border-color: var(--teal) !important;
+  background: rgba(53,190,187,0.10) !important; box-shadow: 0 0 0 3px rgba(53,190,187,0.25); }}
+.tc-file-meta {{ font-size:13px; color: var(--ink-300); margin: -4px 0 10px 2px; }}
+.tc-file-meta b {{ color: var(--ink-100); font-weight:600; }}
+
+/* investor-list picker */
+.tc-badge {{ display:inline-block; font-size:11px; font-weight:600; letter-spacing:.04em; padding:2px 8px;
+  border-radius:999px; margin-left:8px; vertical-align:middle; }}
+.tc-badge.rec {{ background: rgba(53,190,187,0.16); color: var(--teal); border:1px solid rgba(53,190,187,0.45); }}
+.tc-list-meta {{ font-size:12.5px; color: var(--ink-500); margin: -10px 0 8px 30px; }}
+
+/* tooltips always above dropdowns and popovers */
+[data-baseweb="tooltip"] {{ z-index: 1000002 !important; }}
+
+/* no sidebar (its content moved into the page) */
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"] {{ display:none !important; }}
+
+/* ---- round 3: list age, lingering tooltips, compact step bar on phones ---- */
+.tc-stale {{ color: var(--amber); font-weight:600; margin-left:6px; white-space:nowrap; }}
+.tc-list-meta {{ line-height:1.5; }}
+/* a tooltip must never keep itself open by catching the pointer */
+[data-baseweb="tooltip"], [data-baseweb="popover"]:has([role="tooltip"]) {{ pointer-events:none !important; }}
+@media (max-width: 640px) {{
+  .st-key-tc-nav [data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important; gap: 4px; }}
+  .st-key-tc-nav [data-testid="stColumn"] {{ min-width: 0 !important; flex: 1 1 0 !important; width: auto !important; }}
+  [class*="st-key-tc-nav-"] button {{ padding: 6px 4px !important; justify-content:center; }}
+}}
 
 @media (max-width: 640px) {{
   [class*="st-key-tc-hero"] {{ padding: 24px 20px 20px !important; }}
@@ -243,9 +295,10 @@ def hero(eyebrow: str, title: str, highlight: str | None, lede: str, *, narrow: 
     return container
 
 
-def step_nav(steps: list[str], current: int, done: set[int], enabled: set[int]) -> int | None:
-    """Clickable step pills: current step has the gradient border, completed steps a teal check.
-    Returns the index clicked (or None)."""
+def step_nav(steps: list[str], current: int, done: set[int], locked: dict[int, str]) -> int | None:
+    """Clickable step pills. Current step: gradient border; finished: ✓; locked: 🔒, dashed and dimmed,
+    and a toast explains the unlock condition when clicked. Returns the index clicked (locked included, so the caller
+    can explain why they are locked)."""
     styles = []
     for i in range(len(steps)):
         sel = f".st-key-tc-nav-{i} button"
@@ -253,17 +306,64 @@ def step_nav(steps: list[str], current: int, done: set[int], enabled: set[int]) 
             styles.append(f"{sel} {{ color:var(--ink-100) !important; border-color:transparent !important;"
                           "background:linear-gradient(var(--navy-800),var(--navy-800)) padding-box,"
                           "linear-gradient(90deg,var(--coral),var(--amber),var(--teal)) border-box !important; }")
+        elif i in locked:
+            styles.append(f"{sel} {{ opacity:.4; border-style:dashed !important; cursor:not-allowed !important;"
+                          "background:transparent !important; }")
         elif i in done:
-            styles.append(f"{sel} {{ color:var(--ink-300) !important; }}")
-    st.html("<style>" + "".join(styles) + "</style>")
+            styles.append(f"{sel} {{ color:var(--teal) !important; border-color:rgba(53,190,187,.45) !important; }}")
+    # Phones: one compact row — the current step keeps its name, the others show only ✓ / number / 🔒.
+    mobile = []
+    for i in range(len(steps)):
+        if i == current:
+            mobile.append(f"[data-testid='stColumn']:has(.st-key-tc-nav-{i}) {{ flex: 3 1 0 !important; }}")
+            continue
+        mark = "✓" if i in done and i not in locked else ("🔒" if i in locked else str(i + 1))
+        mobile.append(f".st-key-tc-nav-{i} button p {{ font-size:0 !important; }}"
+                      f".st-key-tc-nav-{i} button p::before {{ content:'{mark}'; font-size:12.5px; }}")
+    st.html("<style>" + "".join(styles) + "@media (max-width: 640px) {" + "".join(mobile) + "}</style>")
     clicked = None
     with st.container(key="tc-nav"):
         for i, (col, name) in enumerate(zip(st.columns(len(steps)), steps, strict=True)):
-            mark = "✓" if i in done and i != current else str(i + 1)
-            if col.button(f"{mark}  {name}", key=f"tc-nav-{i}", disabled=i not in enabled and i != current,
-                          width="stretch"):
+            if i == current:
+                mark = str(i + 1)
+            elif i in locked:
+                mark = "🔒"
+            elif i in done:
+                mark = "✓"
+            else:
+                mark = str(i + 1)
+            if col.button(f"{mark}  {name}", key=f"tc-nav-{i}", width="stretch"):
                 clicked = i
     return clicked
+
+
+DRAG_SCRIPT = """
+<script>
+(function () {
+  const doc = window.parent.document;
+  if (doc.__tcDragInstalled) return;
+  doc.__tcDragInstalled = true;
+  const zone = (el) => el && el.closest ? el.closest('[data-testid="stFileUploaderDropzone"]') : null;
+  const clear = (keep) => doc.querySelectorAll('.tc-drag').forEach((n) => { if (n !== keep) n.classList.remove('tc-drag'); });
+  doc.addEventListener('dragenter', (e) => { const z = zone(e.target); clear(z); if (z) z.classList.add('tc-drag'); }, true);
+  doc.addEventListener('dragleave', (e) => { const z = zone(e.target); if (z && !z.contains(e.relatedTarget)) z.classList.remove('tc-drag'); }, true);
+  doc.addEventListener('drop', () => clear(null), true);
+  doc.addEventListener('dragend', () => clear(null), true);
+})();
+</script>
+"""
+
+
+def install_drag_highlight() -> None:
+    """Highlight a drop zone while a file is dragged over it (Streamlit exposes no CSS hook for this)."""
+    import streamlit.components.v1 as components
+
+    components.html(DRAG_SCRIPT, height=0)
+
+
+def html_note(html: str, target=None) -> None:
+    """A small styled note (trusted HTML built by the app)."""
+    (target or st).html(html)
 
 
 def disclosure(html: str, target=None) -> None:
@@ -274,5 +374,32 @@ def code(text: str) -> str:
     return f"<code>{escape(text)}</code>"
 
 
-def footer() -> None:
-    st.html('<div class="tc-footer">Powered by TEN Capital Network</div>')
+def footer(detail: str | None = None) -> None:
+    extra = f" · {escape(detail)}" if detail else ""
+    st.html(f'<div class="tc-footer">Powered by TEN Capital Network{extra}</div>')
+
+
+SCROLL_TOP_SCRIPT = """
+(function () {
+  const doc = window.parent.document;
+  const targets = () => ['[data-testid="stMain"]', '[data-testid="stAppViewContainer"]', 'section.main']
+    .map((sel) => doc.querySelector(sel)).filter(Boolean);
+  const go = () => { targets().forEach((el) => el.scrollTo({top: 0})); window.parent.scrollTo({top: 0}); };
+  // The new step renders over the next moments; keep it at the top until it settles or the user interacts.
+  const obs = new MutationObserver(go);
+  const stop = () => { obs.disconnect(); ['wheel', 'touchstart', 'keydown', 'mousedown']
+    .forEach((ev) => doc.removeEventListener(ev, stop, true)); };
+  go();
+  targets().forEach((el) => obs.observe(el, {childList: true, subtree: true}));
+  ['wheel', 'touchstart', 'keydown', 'mousedown'].forEach((ev) => doc.addEventListener(ev, stop, true));
+  setTimeout(stop, 6000);
+})();
+"""
+
+
+def scroll_to_top(nonce: str) -> None:
+    """Open a step at the top of the page (Streamlit otherwise keeps the previous scroll position).
+    ``nonce`` must change whenever a new scroll is wanted, so the script is mounted again."""
+    import streamlit.components.v1 as components
+
+    components.html(f"<script>/* {escape(nonce)} */{SCROLL_TOP_SCRIPT}</script>", height=0)

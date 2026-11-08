@@ -616,7 +616,8 @@ def build_context(profile: DealProfile, user_aliases: list[str] | None = None) -
     )
 
 
-def profile_bullets(profile: DealProfile, ctx: DealContext, limit: int = 6) -> list[str]:
+def profile_bullets(profile: DealProfile, ctx: DealContext, limit: int = 6,
+                    with_refs: bool = True) -> list[str]:
     """Compact deal-profile bullets for the PDF and UI, from the template's bullet patterns;
     each bullet cites the slide/page references of its facts."""
     from app.reports.template import fill_bullet, load_template
@@ -634,7 +635,7 @@ def profile_bullets(profile: DealProfile, ctx: DealContext, limit: int = 6) -> l
             locs += [s.locator.replace("slide ", markers["slide"]).replace("page ", markers["page"])
                      for s in profile.facts[n].sources[:2]]
         locs = list(dict.fromkeys(locs))[: markers["max_refs"]]
-        return f" [{', '.join(locs)}]" if locs else ""
+        return f" [{', '.join(locs)}]" if locs and with_refs else ""
 
     return [fill_bullet(b.pattern, values, values["company_name"]) + refs(b.fields)
             for b in section.bullets][:limit]
