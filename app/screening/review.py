@@ -40,6 +40,18 @@ def unmapped_score_fields(mapping: dict[str, str | None], weights: dict[str, flo
     return out
 
 
+def unmapped_scoring_columns(mapping: dict[str, str | None]) -> list[str]:
+    """Every investor-list field that feeds the Fit Score and has no column on this sheet. Check size counts
+    once: one of the single column or the min/max pair is enough."""
+    out: list[str] = []
+    for key, _label, fields in SCORE_FIELDS:
+        if key == "check_size":
+            out += [] if any(mapping.get(f) for f in fields) else ["check_size"]
+        else:
+            out += [f for f in fields if not mapping.get(f)]
+    return out
+
+
 # ------------------------------------------------------------------------------ contacts
 
 _INITIAL = re.compile(r"^[A-Za-z]\.?$")
@@ -50,12 +62,21 @@ def incomplete_name(c: Contact) -> bool:
     return not c.first_name or not c.last_name or bool(_INITIAL.match(c.first_name) or _INITIAL.match(c.last_name))
 
 
+# An "organization" that only repeats a kind of investor: the real firm is missing from the list.
+_PLACEHOLDER_ORGS = {"angel", "angels", "angel investor", "angel investors", "investor", "investors", "individual",
+                     "self", "self employed", "private investor", "venture capital", "vc", "family office", "hni"}
+
+
+def placeholder_organization(c: Contact) -> bool:
+    return re.sub(r"[^a-z ]+", " ", c.organization.lower()).strip() in _PLACEHOLDER_ORGS
+
+
 def contact_note(c: Contact) -> str:
-    if c.generic_inbox:
-        return "general inbox"
-    if incomplete_name(c):
-        return "incomplete name"
-    return ""
+    """Data-quality flags to check before outreach ('' when the record looks complete)."""
+    notes = ["general inbox"] if c.generic_inbox else (["incomplete name"] if incomplete_name(c) else [])
+    if placeholder_organization(c):
+        notes.append("check organization")
+    return " · ".join(notes)
 
 
 def projected_rank(score: float, ranked: list[ScoredContact], category=None) -> int:

@@ -83,3 +83,52 @@ def test_matching_never_emails_until_finalized(sample_result, sample_deck, monke
         at.run()
         assert not at.exception
     assert calls == []
+
+
+def test_scoring_fields_unmapped_counted_per_field():
+    mapping = {"sector_focus": "S", "stage_focus": "St", "check_min": "Min", "geo_focus": "G"}
+    assert review.unmapped_scoring_columns(mapping) == ["thesis", "ten_core", "ten_events", "ten_similar_intros"]
+    assert "check_size" in review.unmapped_scoring_columns({})
+
+
+def test_placeholder_organization_is_flagged():
+    c = _contact()
+    c.organization = "#Angels"
+    assert review.contact_note(c) == "check organization"
+    c.organization = "Alliance of Angels"
+    assert review.contact_note(c) == ""
+
+
+def test_small_text_meets_wcag_aa_on_every_panel():
+    from app import ui_theme as ui
+
+    def luminance(colour):
+        channels = [int(colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        r, g, b = (c / 12.92 if c <= .03928 else ((c + .055) / 1.055) ** 2.4 for c in channels)
+        return .2126 * r + .7152 * g + .0722 * b
+
+    for ink in (ui.INK_300, ui.INK_500, ui.INK_600):
+        for panel in (ui.NAVY_950, ui.NAVY_900, ui.NAVY_800, ui.NAVY_700):
+            assert (luminance(ink) + .05) / (luminance(panel) + .05) >= 4.5, (ink, panel)
+
+
+def test_suggestions_offer_accept_all_and_hide_selected_until_ticked(sample_result, sample_deck):
+    from app.models import Category
+    from app.services.claude_review import Suggestion
+
+    result = copy.deepcopy(sample_result)
+    result.category_suggestions = [
+        Suggestion("a@x.com", "Ann Lee", "X", Category.VC, "Notes", "invests at seed", 6.5, "agrees"),
+        Suggestion("b@x.com", "Bo Ray", "Y", Category.ANGEL, "Notes", "family office", 5.5, "differs"),
+    ]
+    at = AppTest.from_file(str(ROOT / "app" / "app.py"), default_timeout=120)
+    at.run()
+    at.session_state["profile"] = result.deal
+    at.session_state["deck"] = sample_deck
+    at.session_state["result"] = result
+    at.session_state["step"] = 3
+    at.run()
+    assert not at.exception
+    labels = [b.label for b in at.button]
+    assert "Accept all 1 verified and re-run" in labels
+    assert not any("selected" in x for x in labels)
