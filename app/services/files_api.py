@@ -56,10 +56,10 @@ def file_id_for(path: Path, settings: Settings | None = None) -> str | None:
 
 
 def connected_investor_lists(settings: Settings | None = None) -> list[Path]:
-    """Built-in lists whose current version is registered with the Files API (newest first). These are the only
-    investor lists the app uses; a list that is new or changed must be synced before it can be selected."""
+    """The trusted built-in lists the app can use (newest first). A list does not need a Files API upload to be
+    selected — only Claude's review of held contacts reads the uploaded copy, and it skips lists without one."""
     settings = settings or get_settings()
-    return [p for p in settings.builtin_investor_lists() if file_id_for(p, settings)]
+    return list(settings.builtin_investor_lists())
 
 
 def count_investors(path: Path) -> int:
@@ -112,7 +112,8 @@ def list_catalog(settings: Settings | None = None) -> list[dict[str, Any]]:
             "label": meta.get("label") or path.stem.replace("_", " "),
             "status": meta.get("status", "current"),
             "note": meta.get("note", ""),
-            "contacts": registry.get(path.name, {}).get("contacts"),
+            "contacts": registry.get(path.name, {}).get("contacts") or meta.get("contacts"),
+            "uploaded": bool(file_id_for(path, settings)),
             "updated": _list_date(path, meta),
         })
     order = {"recommended": 0, "current": 1, "archived": 2}

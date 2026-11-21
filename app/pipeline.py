@@ -118,8 +118,7 @@ def load_builtin_tables(path: Path) -> list[TableInput]:
 
 
 def builtin_suppression_tables(exclude: set[Path] = frozenset(), settings=None) -> list[TableInput]:
-    """Unsubscribe / suppression sheets of every Files API–connected list — applied even when that list isn't
-    selected."""
+    """Unsubscribe / suppression sheets of every built-in list — applied even when that list isn't selected."""
     from app.config import get_settings
     from app.services.files_api import connected_investor_lists
 

@@ -4,7 +4,7 @@
         --intros sample_data/TEN_Intro_Tracker_2026.xlsx sample_data/cardiolyte_health_intros_Q3.csv \
         --out output
 
-Investor lists: only those connected through the Files API (--investors NAME, repeatable; default the
+Investor lists: only the trusted lists in data/investor_lists/ (--investors NAME, repeatable; default the
 newest). Optional: --alias NAME (repeatable), --company-specific FILE (intro lists without a company column),
 --overrides overrides.json ({"field": {"value": "...", "reason": "..."}}), --decisions decisions.json
 ({"email": "Treat as introduced" | "Treat as not introduced"}), --google, --date YYYY-MM-DD,
@@ -45,8 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TEN Capital Investor Match (headless)")
     parser.add_argument("--deck", required=True, type=Path)
     parser.add_argument("--investors", action="append", default=[],
-                        help="Name of a Files API-connected investor list (repeatable; default: the newest connected "
-                             "list). Investor-list spreadsheets outside the connected set are not accepted.")
+                        help="Name of a built-in investor list in data/investor_lists/ (repeatable; default: the "
+                             "newest). Investor-list spreadsheets outside that folder are not accepted.")
     parser.add_argument("--intros", nargs="*", type=Path, default=[])
     parser.add_argument("--alias", action="append", default=[])
     parser.add_argument("--company-specific", nargs="*", type=Path, default=[])
@@ -64,12 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         connected = {p.name: p for p in connected_investor_lists(settings)}
         if not connected:
-            parser.error("No investor list is connected through the Files API. Put it in data/investor_lists/ and "
-                         "run `python -m app.services.files_api`.")
+            parser.error("No investor list found. Put it in data/investor_lists/.")
         unknown = [n for n in args.investors if Path(n).name not in connected]
         if unknown:
-            parser.error(f"Not a Files API-connected investor list: {', '.join(unknown)}. "
-                         f"Connected lists: {', '.join(connected)}.")
+            parser.error(f"Not a built-in investor list: {', '.join(unknown)}. "
+                         f"Available lists: {', '.join(connected)}.")
         chosen = [connected[Path(n).name] for n in args.investors] or [next(iter(connected.values()))]
         deck = load_deck(args.deck, cfg)
         client = None

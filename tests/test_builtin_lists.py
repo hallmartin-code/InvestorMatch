@@ -31,21 +31,25 @@ def _connect(settings):
     sync_builtin_lists(settings, SimpleNamespace(files=FakeFiles()))
 
 
-def test_only_files_api_connected_lists_are_used(tmp_path):
-    from app.services.files_api import connected_investor_lists
+def test_lists_are_usable_without_a_files_api_upload(tmp_path):
+    import json
 
-    connected = _write(tmp_path, "connected.xlsx", {"Master": [HEAD, row()],
-                                                     "Unsubscribed": [["Email"], ["a@x.example"]]})
+    from app.services.files_api import connected_investor_lists, file_id_for, list_catalog
+
+    synced = _write(tmp_path, "synced.xlsx", {"Master": [HEAD, row()],
+                                               "Unsubscribed": [["Email"], ["a@x.example"]]}, age_s=60)
     settings = Settings(im_investor_lists_dir=tmp_path)
     _connect(settings)
     not_synced = _write(tmp_path, "dropped_in_later.xlsx", {"Master": [HEAD, row()],
                                                              "Unsubscribed": [["Email"], ["b@x.example"]]})
-    assert connected_investor_lists(settings) == [connected]          # new file is not connected until synced
-    assert not_synced in settings.builtin_investor_lists()
+    (tmp_path / "catalog.json").write_text(json.dumps({"dropped_in_later.xlsx": {"contacts": 7}}), encoding="utf-8")
+    assert connected_investor_lists(settings) == [not_synced, synced]  # selectable before any upload
+    assert file_id_for(not_synced, settings) is None                   # ... the AI review just skips it
     sheets = {t.table.filename for t in builtin_suppression_tables(settings=settings)}
-    assert sheets == {"connected.xlsx"}
-    connected.write_bytes(workbook({"Master": [HEAD, row(Email="changed@x.example")]}))
-    assert connected_investor_lists(settings) == []                   # a changed file must be re-synced
+    assert sheets == {"synced.xlsx", "dropped_in_later.xlsx"}         # its unsubscribes always apply
+    items = {x["path"].name: x for x in list_catalog(settings)}
+    assert items["dropped_in_later.xlsx"]["contacts"] == 7 and not items["dropped_in_later.xlsx"]["uploaded"]
+    assert items["synced.xlsx"]["uploaded"]
 
 
 def test_builtin_lists_newest_first_and_default(tmp_path):

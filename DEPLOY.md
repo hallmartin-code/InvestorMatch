@@ -72,16 +72,18 @@ records when it was emailed. `IM_HISTORY_MAX_RUNS` (default 500, 0 = unlimited) 
 beyond that count — a run is roughly 0.1 MB (PDF) + up to ~8 MB (workbook), so watch the Postgres volume.
 If the database is down, matching still works and the panel says history is unavailable.
 
-## Investor lists (Files API–connected only)
+## Investor lists (built-in only)
 
 `data/investor_lists/` holds the trusted TEN Capital investor lists offered in the app. They are excluded from Git
 (`.gitignore`) but deployed with the app (`.railwayignore` / `.dockerignore` re-include them), so always deploy with
 `--no-gitignore`; without it the lists are left out and the app falls back to uploads. A deploy triggered from the
-Only lists connected through the Files API are offered in the app (no investor-list uploads). To add or replace a list, put the file in `data/investor_lists/`, run
-`python -m app.services.files_api` (uploads it to the Anthropic Files API and records its file ID in
-`data/investor_lists/files_api.json`, together with its investor count), then redeploy. Give each list a display
-name and status in `data/investor_lists/catalog.json` — `recommended` (the official list, shown first with a
-badge and pre-selected), `current`, or `archived` (grouped under "Archived versions") — plus a one-line note. File IDs work only with the same Anthropic organization's
+Every list in `data/investor_lists/` is offered in the app (no investor-list uploads). To add or replace a list, put
+the file in `data/investor_lists/` and redeploy. Give each list a display name and status in
+`data/investor_lists/catalog.json` — `recommended` (the official list, shown first with a badge and pre-selected),
+`current`, or `archived` (grouped under "Archived versions") — plus a one-line note, its `date` and, until it is
+synced, its `contacts` count. When `ANTHROPIC_API_KEY` works, also run `python -m app.services.files_api` (uploads the
+list to the Anthropic Files API and records its file ID and investor count in `data/investor_lists/files_api.json`);
+only Claude's review of held contacts needs the upload, and it skips lists without one. File IDs work only with the same Anthropic organization's
 API key; if you change `ANTHROPIC_API_KEY` to a key from another organization, run the sync again.
 
 ## Cost and safety

@@ -79,20 +79,20 @@ classification, matching values are marked "Confirmed by Claude", and disagreeme
 user to resolve. The deck is passed as data in `<deck>` tags with an instruction to ignore instructions inside
 it. Screening, scoring and the template-driven PDF/Excel stay deterministic Python.
 
-## Investor lists: Files API–connected only
+## Investor lists: built-in only
 
 Investor-list spreadsheets are **not uploaded** in the app. The only investor lists used for matching are the
-ones connected through the Anthropic Files API: files in `data/investor_lists/` whose current version has a file
-ID in `data/investor_lists/files_api.json`. A file that is added or changed is not offered until it is synced:
+trusted files in `data/investor_lists/`. Syncing them to the Anthropic Files API is optional — only Claude's review
+of held contacts needs it, and it skips lists that have not been synced:
 
 ```bash
 python -m app.services.files_api      # upload new/changed lists to the Files API and record their file IDs
 ```
 
-The Inputs step offers the connected lists in a picker (newest first, newest selected); the CLI takes
-`--investors NAME` (repeatable; default the newest connected list) and rejects anything else. Because the Files API
-cannot return uploaded files, matching reads the app's own copy of each connected list; Claude reads the same file
-by file ID (see below). **Unsubscribe sheets from every connected list always apply**, even when that list isn't
+The Inputs step offers the built-in lists in a picker (recommended first, per `catalog.json`); the CLI takes
+`--investors NAME` (repeatable; default the newest list) and rejects anything else. Because the Files API
+cannot return uploaded files, matching always reads the app's own copy of each list; Claude reads the same file
+by file ID (see below). **Unsubscribe sheets from every built-in list always apply**, even when that list isn't
 selected. Within a file, a sheet whose rows are already on a larger sheet (e.g. "A-Priority" of "Master") is
 skipped automatically. *Investor Introductions* trackers are still uploaded per run.
 
