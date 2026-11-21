@@ -35,6 +35,9 @@ class CategoryResult:
 
 
 def categorize(contact: Contact) -> CategoryResult:
+    if contact.values.get("_not_investor"):
+        return CategoryResult(excluded_code="NOT_INVESTOR",
+                              excluded_reason=f"Marked as not an investor on the list ({contact.values['_not_investor']})")
     if contact.values.get("_type_conflict"):
         return CategoryResult(review_reason=f"Duplicate records disagree on investor type: {contact.values['_type_conflict']}")
     text = contact.get("investor_type")

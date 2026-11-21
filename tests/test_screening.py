@@ -33,6 +33,21 @@ def test_duplicates_merge_by_email_and_fill_missing_fields(cfg):
     assert len(contact.sources) == 2
 
 
+def test_master_list_is_investor_flag_and_standardised_type(cfg):
+    extra = {"Investor Type (Std)": "", "Is Investor": ""}
+    rows = [investor(Email="nope@x.example", **{**extra, "Is Investor": "N"}),
+            investor(Email="fill@x.example", **{**extra, "Investor Type": "", "Investor Type (Std)": "Angel"}),
+            investor(Email="pe@x.example", **{**extra, "Investor Type": "Private Equity Firm",
+                                              "Investor Type (Std)": "VC"}),
+            investor(Email="yes@x.example", **{**extra, "Is Investor": "Y"})]
+    r = run(cfg, rows)
+    assert "NOT_INVESTOR" in codes(r, "nope@x.example")
+    assert "EXCLUDED_PE" in codes(r, "pe@x.example")            # raw type wins over the standardised one
+    ranked = {s.contact.email: s for s in r.ranked}
+    assert ranked["fill@x.example"].category == Category.ANGEL  # blank raw type filled from the Std column
+    assert "yes@x.example" in ranked and "nope@x.example" not in ranked
+
+
 def test_invalid_missing_and_generic_emails(cfg):
     rows = [investor(Email="bad@@x.example"), investor(Email="", **{"First Name": "No"}),
             investor(Email="info@angels.example", **{"First Name": "", "Last Name": ""})]

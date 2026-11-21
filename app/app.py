@@ -37,6 +37,7 @@ from app.ingestion.mapping import (  # noqa: E402
 )
 from app.screening.contacts import suppression_emails  # noqa: E402
 from app.services import claude_review  # noqa: E402
+from app.services import history  # noqa: E402
 from app.services.files_api import list_catalog  # noqa: E402
 from app.models import DEAL_FIELDS, FactStatus, LogStatus  # noqa: E402
 from app.pipeline import (  # noqa: E402
@@ -314,6 +315,46 @@ def _investor_list_picker() -> list:
     return chosen
 
 
+def _history_panel() -> None:
+    """Past runs with their PDF and workbook (only when a database is configured)."""
+    if not history.available(settings):
+        return
+    runs = history.list_runs(settings=settings)
+    st.markdown("### Run history")
+    if runs is None:
+        st.warning("Run history is unavailable right now (the database could not be reached). Matching still works.")
+        return
+    if not runs:
+        st.caption("Completed runs appear here with their PDF and workbook, so you can download them again later.")
+        return
+    st.caption(f"{len(runs):,} most recent run(s). Select one to download its files.")
+    table = pd.DataFrame([{
+        "Date (UTC)": f"{r['updated_at']:%Y-%m-%d %H:%M}", "Company": r["company"] or "—", "Deck": r["deck_file"],
+        "Ranked": f"{r['ranked']:,}", "Held": f"{r['held']:,}", "Introduced": f"{r['introduced']:,}",
+        "Emailed": f"{r['emailed_at']:%Y-%m-%d}" if r["emailed_at"] else "—",
+    } for r in runs])
+    event = st.dataframe(table, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
+                         key="history-table", height=min(35 * (len(table) + 1) + 3, 420))
+    picked = event.selection.rows if event and event.selection else []
+    if not picked:
+        return
+    run = runs[picked[0]]
+    files = history.get_files(run["id"], settings)
+    c1, c2, c3 = st.columns(3)
+    for col, name in zip((c1, c2), (run["pdf_name"], run["xlsx_name"]), strict=True):
+        if name in files:
+            mime = "application/pdf" if name.endswith(".pdf") else \
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            col.download_button(f"⬇ {'PDF' if name.endswith('.pdf') else 'Workbook'} · {run['company'] or name}",
+                                files[name], name, mime, width="stretch", key=f"hist-{run['id']}-{name}")
+    if c3.button("Delete this run", width="stretch", key=f"hist-del-{run['id']}"):
+        if history.delete_run(run["id"], settings):
+            if state.get("run_id") == run["id"]:
+                state.run_id = None
+            state._toast = (f"Deleted the run for {run['company'] or run['deck_file']}", "🗑️")
+        st.rerun()
+
+
 def step_inputs() -> None:
     hero = ui.hero("Step 1 of 5", "Pitch Deck", "Investor Shortlist",
                    "Upload a pitch deck and choose a TEN Capital investor list to get a ranked investor shortlist, "
@@ -399,9 +440,11 @@ def step_inputs() -> None:
                             f.name, state.aliases + deck_names)
                         state.intros.append(t)
                 state.result, state.outputs, state.decisions = None, None, {}
+                state.run_id = None
                 navigate(1)
             except InvestorMatchError as exc:
                 st.error(str(exc))
+    _history_panel()
 
 
 # ------------------------------------------------------------------------------ 2. mapping
@@ -686,6 +729,8 @@ def _run(goto: int | None = 3) -> None:
                 claude_review.review_held_contacts(state.result, state.investors, settings)
             step("Generating the PDF and workbook")
             state.outputs = render_outputs(state.result)
+            if history.available(settings):
+                state.run_id = history.save_run(state.result, state.outputs, state.get("run_id"), settings)
     except InvestorMatchError as exc:
         st.error(str(exc))
         return
@@ -915,6 +960,7 @@ def _finalize(result) -> None:
                 outcome = deliver_results(result, state.outputs, settings)
             if outcome.sent:
                 state.setdefault("sent_emails", []).append(outcome)
+                history.mark_emailed(state.get("run_id"), settings.notify_recipients(), settings)
             st.rerun()
 
 

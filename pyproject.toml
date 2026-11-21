@@ -16,6 +16,8 @@ dependencies = [
     "rapidfuzz>=3.6",
     "streamlit>=1.40",
     "rapidocr-onnxruntime>=1.2",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
 ]
 
 [project.optional-dependencies]

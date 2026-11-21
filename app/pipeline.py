@@ -139,9 +139,15 @@ def load_deck(path: Path, cfg: dict[str, Any], display_name: str | None = None) 
 def extract(deck: DeckDocument, *, llm_client: Any = None) -> DealProfile:
     profile = extract_profile(deck)
     if llm_client is not None:
+        from app.errors import LLMUnavailableError
         from app.extraction.llm import augment_profile
 
-        augment_profile(profile, deck, llm_client)
+        try:
+            augment_profile(profile, deck, llm_client)
+        except LLMUnavailableError as exc:      # e.g. revoked key or outage: keep going with keyword extraction
+            LOGGER.warning("AI deck analysis skipped: %s", exc)
+            profile.warnings.append(f"AI analysis was skipped ({exc}) The facts below were read with keyword "
+                                    "matching only, so check them carefully.")
     return profile
 
 

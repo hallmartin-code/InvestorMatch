@@ -65,3 +65,18 @@ def test_numbers_must_appear_in_quote_and_remaining_is_recalculated():
     assert profile.facts["raise_amount"].value == Money(3_000_000)
     assert profile.facts["amount_remaining"].value == Money(2_000_000)
     assert profile.facts["amount_remaining"].status == FactStatus.CALCULATED
+
+
+def test_rejected_key_falls_back_to_keyword_extraction(sample_deck):
+    from app.errors import LLMUnavailableError
+    from app.pipeline import extract
+
+    class RevokedKey:
+        def __getattr__(self, name):
+            def fail(*args, **kwargs):
+                raise LLMUnavailableError("The Anthropic API key was rejected (HTTP 401). Check ANTHROPIC_API_KEY.")
+            return fail
+
+    profile = extract(sample_deck, llm_client=RevokedKey())
+    assert profile.effective("company_name")                       # keyword extraction still ran
+    assert any("AI analysis was skipped" in w for w in profile.warnings)

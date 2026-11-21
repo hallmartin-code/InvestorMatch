@@ -53,6 +53,25 @@ railway up --service investor-match --ci --no-gitignore   # build + deploy (incl
 railway logs --service investor-match      # runtime logs
 ```
 
+## Run history (Postgres)
+
+Every completed run is saved with its PDF and workbook, listed under **Run history** on the first screen
+(download again or delete). It is on whenever `DATABASE_URL` is set; without it the app works as before.
+
+One-time setup (needs `railway login`):
+
+```sh
+railway add --database postgres                      # adds a "Postgres" service to the project
+railway variables --service investor-match --set 'DATABASE_URL=${{Postgres.DATABASE_URL}}'
+railway variables --service web --set 'DATABASE_URL=${{Postgres.DATABASE_URL}}'
+```
+
+The `${{Postgres.DATABASE_URL}}` reference keeps the password inside Railway (never in the repo). The app
+creates its table (`im_runs`) on first use. Re-running the same analysis updates its row; "Finalize & email"
+records when it was emailed. `IM_HISTORY_MAX_RUNS` (default 500, 0 = unlimited) deletes the oldest runs
+beyond that count — a run is roughly 0.1 MB (PDF) + up to ~8 MB (workbook), so watch the Postgres volume.
+If the database is down, matching still works and the panel says history is unavailable.
+
 ## Investor lists (Files API–connected only)
 
 `data/investor_lists/` holds the trusted TEN Capital investor lists offered in the app. They are excluded from Git

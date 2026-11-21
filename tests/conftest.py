@@ -7,6 +7,7 @@ import sys
 # Tests never call external services, whatever the local .env contains.
 os.environ["IM_NOTIFY_ENABLED"] = "false"
 os.environ["IM_LLM_ENABLED"] = "false"
+os.environ["DATABASE_URL"] = ""  # run history off unless a test turns it on
 from datetime import date
 from pathlib import Path
 

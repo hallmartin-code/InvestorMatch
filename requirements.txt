@@ -15,6 +15,9 @@ rapidocr-onnxruntime>=1.2
 # Optional Google Sheets export (service account)
 gspread>=6.0
 google-auth>=2.30
+# Run history (DATABASE_URL: Railway Postgres in production, any SQLAlchemy URL locally)
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
 # Optional Claude-assisted extraction (IM_LLM_ENABLED=true + ANTHROPIC_API_KEY)
 anthropic>=0.116,<1  # tested on 0.125; 1.x has breaking SDK changes
 

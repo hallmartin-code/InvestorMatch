@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     im_public_url: str = ""                 # link in the email; defaults to the Railway public domain
     railway_public_domain: str = ""
 
+    # Run history (PDF + workbook of every run). On whenever DATABASE_URL is set — on Railway, reference the
+    # Postgres service's DATABASE_URL. 0 keeps every run; otherwise the oldest beyond this count are deleted.
+    database_url: SecretStr | None = None
+    im_history_max_runs: int = 500
+
     def notify_recipients(self) -> list[str]:
         return [p.strip() for p in self.im_notify_to.replace(";", ",").split(",") if p.strip()]
 

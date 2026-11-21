@@ -77,10 +77,28 @@ def _extra_suppression(row: dict[str, str], flags: list[str], statuses: list[str
     return None
 
 
+_STD_TYPE_HEADER = re.compile(r"^(?:investor )?type (?:std|standardi[sz]ed)$|^standardi[sz]ed (?:investor )?type$")
+_IS_INVESTOR_HEADER = re.compile(r"^is (?:an )?investor$")
+_NOT_INVESTOR_VALUE = re.compile(r"^\s*(?:n|no|false|0|not an investor)\s*$", re.I)
+
+
+def _norm_header(header: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", header.lower()).strip()
+
+
+def _helper_column(table: ImportedTable, pattern: re.Pattern[str], mapping: dict[str, str | None]) -> str | None:
+    used = {c for c in mapping.values() if c}
+    return next((c for c in table.columns if c not in used and pattern.search(_norm_header(c))), None)
+
+
 def build_records(table: ImportedTable, mapping: dict[str, str | None], cfg: dict[str, Any]) -> list[ContactRecord]:
     terms = [t.lower() for t in cfg["screening"]["suppression_terms"]]
     header = mapping.get("suppression") or ""
     flag_cols, status_cols = _extra_suppression_columns(table, mapping.get("suppression"))
+    # Curated master lists carry a standardised type (used only where the raw type is blank — the raw type keeps
+    # distinctions such as private equity that the standardised one folds into "VC") and an "Is Investor" flag.
+    std_type_col = _helper_column(table, _STD_TYPE_HEADER, mapping) if mapping.get("investor_type") else None
+    is_investor_col = _helper_column(table, _IS_INVESTOR_HEADER, mapping)
     raw_rows = dict(zip(table.row_numbers, table.rows, strict=True))
     records = []
     for values, row in apply_mapping(table, mapping):
@@ -97,6 +115,11 @@ def build_records(table: ImportedTable, mapping: dict[str, str | None], cfg: dic
         if reason is None and (flag_cols or status_cols):
             reason = _extra_suppression(raw_rows[row], flag_cols, status_cols)
         values["_suppressed"] = reason or ""
+        raw = raw_rows[row]
+        if std_type_col and not values.get("investor_type") and (raw.get(std_type_col) or "").strip():
+            values["investor_type"] = raw[std_type_col].strip()
+        flag = (raw.get(is_investor_col) or "") if is_investor_col else ""
+        values["_not_investor"] = f"{is_investor_col}: {flag.strip()}" if _NOT_INVESTOR_VALUE.match(flag) else ""
         values["_participation_header"] = mapping.get("participation") or ""
         records.append(ContactRecord(values=values, source=SourceRef(table.filename, f"row {row}", table.sheet)))
     return records
@@ -161,6 +184,7 @@ def consolidate(records: list[ContactRecord], cfg: dict[str, Any],
                     if key == "investor_type":
                         merged["_type_conflict"] = " | ".join(values)
         merged["_participation_header"] = recs[0].values.get("_participation_header", "")
+        merged["_not_investor"] = next((r.values["_not_investor"] for r in recs if r.values.get("_not_investor")), "")
         suppressed = [r.values["_suppressed"] for r in recs if r.values.get("_suppressed")]
         if suppression_list:
             listed = next((suppression_list[e] for e in [email, *alternative_emails(merged)] if e in suppression_list),
